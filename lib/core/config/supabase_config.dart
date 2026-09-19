@@ -4,9 +4,18 @@ class SupabaseConfig {
   SupabaseConfig._();
 
   // Project URL and Public Anon Key
-  // Safe to be included in client apps (access is strictly guarded by PostgreSQL RLS)
-  static const String defaultSupabaseUrl = 'https://ntnwaztcefqggawcydqq.supabase.co';
-  static const String defaultSupabaseAnonKey = 'sb_publishable_QCi8XlcbSzZKSZcztLrlIA_L3Shi55u';
+  // Prioritizes environment variables, then local_secrets.dart
+  static String get defaultSupabaseUrl {
+    const envUrl = String.fromEnvironment('SUPABASE_URL');
+    if (envUrl.isNotEmpty) return envUrl;
+    return localSupabaseUrl;
+  }
+
+  static String get defaultSupabaseAnonKey {
+    const envKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+    if (envKey.isNotEmpty) return envKey;
+    return localSupabaseAnonKey;
+  }
 
   // Groq API Key Rotation Pool
   // Prioritizes environment variable --dart-define=GROQ_API_KEY, then local_secrets.dart

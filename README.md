@@ -135,13 +135,22 @@ Proje dizininde terminali açın:
 flutter pub get
 ```
 
-### 3. Testleri Çalıştırma
+### 3. Yerel Gizli Anahtarlar (Local Secrets)
+Projeyi derlemeden önce şablon gizli anahtar dosyasını kopyalayın:
+```bash
+cp lib/core/config/local_secrets.example.dart lib/core/config/local_secrets.dart
+```
+*(Windows PowerShell için: `Copy-Item lib/core/config/local_secrets.example.dart lib/core/config/local_secrets.dart`)*
+
+İsteğe bağlı olarak bu dosya içine kendi Groq API, TMDB API veya Supabase anahtarlarınızı girebilirsiniz. Bu dosya `.gitignore` listesinde olduğu için anahtarlarınız asla GitHub'a yüklenmez.
+
+### 4. Testleri Çalıştırma
 Tüm birim ve entegrasyon testlerini koşturun:
 ```bash
 flutter test
 ```
 
-### 4. Uygulamayı Başlatma
+### 5. Uygulamayı Başlatma
 
 **Windows Masaüstü:**
 ```bash

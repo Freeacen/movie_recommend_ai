@@ -1,6 +1,14 @@
+import '../config/local_secrets.dart';
+
 class ApiConstants {
   // TMDB API constants
-  static const String defaultTmdbApiKey = '3c0b5093d8658b3bea645bad32e80924';
+  // Prioritizes --dart-define=TMDB_API_KEY, then local_secrets.dart
+  static String get defaultTmdbApiKey {
+    const envKey = String.fromEnvironment('TMDB_API_KEY');
+    if (envKey.isNotEmpty) return envKey;
+    return localTmdbApiKey;
+  }
+
   static const String tmdbBaseUrl = 'https://api.themoviedb.org/3';
   static const String tmdbImageBaseUrlW500 = 'https://image.tmdb.org/t/p/w500';
   static const String tmdbImageBaseUrlOriginal = 'https://image.tmdb.org/t/p/original';

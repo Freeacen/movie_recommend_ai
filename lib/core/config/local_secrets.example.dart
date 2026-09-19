@@ -3,3 +3,6 @@
 // cp lib/core/config/local_secrets.example.dart lib/core/config/local_secrets.dart
 
 const String localGroqApiKey = '';
+const String localTmdbApiKey = '';
+const String localSupabaseUrl = '';
+const String localSupabaseAnonKey = '';
