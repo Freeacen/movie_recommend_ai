@@ -68,6 +68,8 @@ class _RatingDialogState extends ConsumerState<RatingDialog> {
           const SizedBox(height: 4),
           Text(
             widget.movie.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(fontSize: 13, color: AppColors.textMedium),
           ),
         ],
@@ -83,21 +85,21 @@ class _RatingDialogState extends ConsumerState<RatingDialog> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                color: AppColors.primaryAmber.withValues(alpha: 0.12),
+                color: AppColors.primaryBlue.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.primaryAmber.withValues(alpha: 0.3)),
+                border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.3)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.star_rounded, size: 28, color: AppColors.primaryAmber),
+                  const Icon(Icons.star_rounded, size: 28, color: AppColors.primaryBlue),
                   const SizedBox(width: 8),
                   Text(
                     '${_rating.toStringAsFixed(1)} / 10.0',
                     style: const TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
-                      color: AppColors.primaryAmber,
+                      color: AppColors.primaryBlue,
                     ),
                   ),
                 ],
@@ -109,10 +111,10 @@ class _RatingDialogState extends ConsumerState<RatingDialog> {
             // 1.0 - 10.0 Slider
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
-                activeTrackColor: AppColors.primaryAmber,
+                activeTrackColor: AppColors.primaryBlue,
                 inactiveTrackColor: AppColors.surfaceElevated,
-                thumbColor: AppColors.primaryAmber,
-                overlayColor: AppColors.primaryAmber.withValues(alpha: 0.2),
+                thumbColor: AppColors.primaryBlue,
+                overlayColor: AppColors.primaryBlue.withValues(alpha: 0.2),
                 trackHeight: 4,
               ),
               child: Slider(
@@ -137,11 +139,11 @@ class _RatingDialogState extends ConsumerState<RatingDialog> {
                   label: Text('${score.toStringAsFixed(1)} ⭐'),
                   labelStyle: TextStyle(
                     fontSize: 11,
-                    color: isSelected ? Colors.black : AppColors.textHigh,
+                    color: isSelected ? Colors.white : AppColors.textHigh,
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                   ),
                   selected: isSelected,
-                  selectedColor: AppColors.primaryAmber,
+                  selectedColor: AppColors.primaryBlue,
                   backgroundColor: AppColors.surfaceElevated,
                   onSelected: (selected) {
                     if (selected) {
@@ -218,7 +220,7 @@ class _RatingDialogState extends ConsumerState<RatingDialog> {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.calendar_today_rounded, size: 16, color: AppColors.primaryAmber),
+                  const Icon(Icons.calendar_today_rounded, size: 16, color: AppColors.primaryBlue),
                   const SizedBox(width: 8),
                   Text('İzlenme Tarihi:', style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   const Spacer(),
@@ -242,7 +244,7 @@ class _RatingDialogState extends ConsumerState<RatingDialog> {
                             data: Theme.of(ctx).copyWith(
                               colorScheme: ColorScheme(
                                 brightness: Theme.of(ctx).brightness,
-                                primary: AppColors.primaryAmber,
+                                primary: AppColors.primaryBlue,
                                 onPrimary: Colors.white,
                                 secondary: AppColors.primaryBlue,
                                 onSecondary: Colors.white,
@@ -262,10 +264,10 @@ class _RatingDialogState extends ConsumerState<RatingDialog> {
                         });
                       }
                     },
-                    icon: const Icon(Icons.edit_calendar_rounded, size: 14, color: AppColors.primaryAmber),
+                    icon: const Icon(Icons.edit_calendar_rounded, size: 14, color: AppColors.primaryBlue),
                     label: Text(
                       DateFormatter.formatFriendly(_selectedWatchDate.toIso8601String()),
-                      style: const TextStyle(fontSize: 12, color: AppColors.primaryAmber, fontWeight: FontWeight.bold),
+                      style: const TextStyle(fontSize: 12, color: AppColors.primaryBlue, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ],

@@ -56,56 +56,167 @@ class TmdbService {
     37: 'Vahşi Batı',
   };
 
-  /// Fetch trending movies (Day or Week)
-  Future<List<Movie>> getTrendingMovies() async {
+  static final Map<String, int> genreNameToId = {
+    for (final entry in genreMap.entries) entry.value.toLowerCase(): entry.key,
+  };
+
+  /// Fetch trending movies (Day or Week) with pagination support
+  Future<List<Movie>> getTrendingMovies({int page = 1}) async {
+    return _fetchMovieList(
+      '${ApiConstants.tmdbBaseUrl}/trending/movie/week?api_key=$apiKey&language=tr-TR&page=$page',
+      fallbackMock: page == 1,
+    );
+  }
+
+  /// Fetch popular movies with pagination
+  Future<List<Movie>> getPopularMovies({int page = 1}) async {
+    return _fetchMovieList(
+      '${ApiConstants.tmdbBaseUrl}/movie/popular?api_key=$apiKey&language=tr-TR&page=$page',
+      fallbackMock: page == 1,
+    );
+  }
+
+  /// Fetch top rated masterpieces with pagination
+  Future<List<Movie>> getTopRatedMovies({int page = 1}) async {
+    return _fetchMovieList(
+      '${ApiConstants.tmdbBaseUrl}/movie/top_rated?api_key=$apiKey&language=tr-TR&page=$page',
+      fallbackMock: page == 1,
+    );
+  }
+
+  /// Fetch currently playing / fresh releases with pagination
+  Future<List<Movie>> getNowPlayingMovies({int page = 1}) async {
+    return _fetchMovieList(
+      '${ApiConstants.tmdbBaseUrl}/movie/now_playing?api_key=$apiKey&language=tr-TR&page=$page',
+      fallbackMock: page == 1,
+    );
+  }
+
+  /// Discover movies by genre via TMDB /discover/movie with pagination
+  Future<List<Movie>> discoverMoviesByGenre({required int genreId, int page = 1}) async {
+    return discoverMoviesWithFilters(genreId: genreId, page: page);
+  }
+
+  /// Discover movies with rich filters (genre, sort, minRating, release years) via TMDB /discover/movie
+  Future<List<Movie>> discoverMoviesWithFilters({
+    int? genreId,
+    String sortBy = 'popularity.desc',
+    double? minRating,
+    int? minYear,
+    int? maxYear,
+    int page = 1,
+  }) async {
+    final queryParams = <String, String>{
+      'api_key': apiKey ?? '',
+      'language': 'tr-TR',
+      'page': page.toString(),
+      'sort_by': sortBy,
+      'include_adult': 'false',
+    };
+    if (genreId != null) {
+      queryParams['with_genres'] = genreId.toString();
+    }
+    if (minRating != null && minRating > 0) {
+      queryParams['vote_average.gte'] = minRating.toString();
+      queryParams['vote_count.gte'] = '20';
+    }
+    if (minYear != null) {
+      queryParams['primary_release_date.gte'] = '$minYear-01-01';
+    }
+    if (maxYear != null) {
+      queryParams['primary_release_date.lte'] = '$maxYear-12-31';
+    }
+
+    final queryString = queryParams.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&');
+    return _fetchMovieList(
+      '${ApiConstants.tmdbBaseUrl}/discover/movie?$queryString',
+      fallbackMock: false,
+    );
+  }
+
+  Future<List<Movie>> _fetchMovieList(String url, {bool fallbackMock = false}) async {
     final key = apiKey;
     if (key == null || key.trim().isEmpty) {
-      return getMockMovies();
+      return fallbackMock ? getMockMovies() : [];
     }
 
     try {
-      final uri = Uri.parse('${ApiConstants.tmdbBaseUrl}/trending/movie/week?api_key=$key&language=tr-TR');
+      final uri = Uri.parse(url);
       final response = await _client.get(uri);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final results = data['results'] as List<dynamic>;
-        return results.map((item) => Movie.fromTmdbJson(item, genreMap: genreMap)).toList();
-      } else {
-        return getMockMovies();
+        final results = data['results'] as List<dynamic>?;
+        if (results != null) {
+          return results.map((item) => Movie.fromTmdbJson(item, genreMap: genreMap)).toList();
+        }
       }
+      return fallbackMock ? getMockMovies() : [];
     } catch (_) {
-      return getMockMovies();
+      return fallbackMock ? getMockMovies() : [];
     }
   }
 
-  /// Search movies via TMDB API (fast, reliable, 0 Gemini tokens).
-  Future<List<Movie>> searchMovies(String query) async {
-    final cleanQuery = query.trim();
+  /// Search movies via TMDB API with pagination support
+  Future<List<Movie>> searchMovies(String query, {int page = 1}) async {
+    final cleanQuery = query.trim().replaceAll('"', '').replaceAll("'", '').replaceAll('`', '');
     if (cleanQuery.isEmpty) return [];
 
     final key = apiKey;
     if (key != null && key.trim().isNotEmpty) {
-      try {
-        final uri = Uri.parse('${ApiConstants.tmdbBaseUrl}/search/movie?api_key=$key&query=${Uri.encodeComponent(cleanQuery)}&language=tr-TR');
-        final response = await _client.get(uri);
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final results = data['results'] as List<dynamic>;
-          if (results.isNotEmpty) {
-            return results.map((item) => Movie.fromTmdbJson(item, genreMap: genreMap)).toList();
-          }
+      // Build candidate search queries (e.g. "Geliş (Arrival)" -> ["Geliş (Arrival)", "Geliş", "Arrival"])
+      final candidates = <String>[cleanQuery];
+      final withoutParentheses = cleanQuery.replaceAll(RegExp(r'\([^\)]*\)'), '').trim();
+      if (withoutParentheses.isNotEmpty && withoutParentheses != cleanQuery) {
+        candidates.add(withoutParentheses);
+      }
+      final insideMatch = RegExp(r'\(([^)]+)\)').firstMatch(cleanQuery);
+      if (insideMatch != null) {
+        final insideText = insideMatch.group(1)?.trim();
+        if (insideText != null && insideText.isNotEmpty && int.tryParse(insideText) == null) {
+          candidates.add(insideText);
         }
-      } catch (_) {}
+      }
+
+      for (final q in candidates) {
+        // 1. Try Turkish locale first
+        final trResults = await _executeTmdbSearch(q, key, language: 'tr-TR', page: page);
+        if (trResults.isNotEmpty) {
+          return trResults;
+        }
+
+        // 2. Try global/English fallback if not found
+        final enResults = await _executeTmdbSearch(q, key, language: 'en-US', page: page);
+        if (enResults.isNotEmpty) {
+          return enResults;
+        }
+      }
     }
 
-    // Fallback to local catalog if offline
-    final mock = getMockMovies();
-    final localMatches = mock.where((m) =>
-        m.title.toLowerCase().contains(cleanQuery.toLowerCase()) ||
-        (m.genres ?? '').toLowerCase().contains(cleanQuery.toLowerCase())).toList();
-    return localMatches;
+    // Fallback to local catalog if offline (only for page 1)
+    if (page == 1) {
+      final mock = getMockMovies();
+      final localMatches = mock.where((m) =>
+          m.title.toLowerCase().contains(cleanQuery.toLowerCase()) ||
+          (m.genres ?? '').toLowerCase().contains(cleanQuery.toLowerCase())).toList();
+      return localMatches;
+    }
+    return [];
+  }
+
+  Future<List<Movie>> _executeTmdbSearch(String query, String key, {required String language, int page = 1}) async {
+    try {
+      final uri = Uri.parse('${ApiConstants.tmdbBaseUrl}/search/movie?api_key=$key&query=${Uri.encodeComponent(query)}&language=$language&include_adult=false&page=$page');
+      final response = await _client.get(uri);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = data['results'] as List<dynamic>?;
+        if (results != null && results.isNotEmpty) {
+          return results.map((item) => Movie.fromTmdbJson(item, genreMap: genreMap)).toList();
+        }
+      }
+    } catch (_) {}
+    return [];
   }
 
   /// Dedicated method to search with Gemini AI when TMDB has no results and user explicitly requests it
@@ -140,6 +251,102 @@ class TmdbService {
       return null;
     }
   }
+
+  /// Fetch trailer YouTube key for a movie
+  /// Tries Turkish trailer first, falls back to English/original trailer, then mock fallback
+  Future<String?> getMovieTrailer(int movieId) async {
+    final key = apiKey;
+    if (key != null && key.trim().isNotEmpty) {
+      try {
+        // 1. Try Turkish trailers
+        final trUri = Uri.parse('${ApiConstants.tmdbBaseUrl}/movie/$movieId/videos?api_key=$key&language=tr-TR');
+        final trResponse = await _client.get(trUri);
+        if (trResponse.statusCode == 200) {
+          final trData = jsonDecode(trResponse.body);
+          final trKey = _extractBestYouTubeKey(trData['results'] as List<dynamic>?);
+          if (trKey != null) return trKey;
+        }
+
+        // 2. Fallback to English / default language
+        final enUri = Uri.parse('${ApiConstants.tmdbBaseUrl}/movie/$movieId/videos?api_key=$key&language=en-US');
+        final enResponse = await _client.get(enUri);
+        if (enResponse.statusCode == 200) {
+          final enData = jsonDecode(enResponse.body);
+          final enKey = _extractBestYouTubeKey(enData['results'] as List<dynamic>?);
+          if (enKey != null) return enKey;
+        }
+
+        // 3. Fallback without language parameter (all available videos)
+        final anyUri = Uri.parse('${ApiConstants.tmdbBaseUrl}/movie/$movieId/videos?api_key=$key');
+        final anyResponse = await _client.get(anyUri);
+        if (anyResponse.statusCode == 200) {
+          final anyData = jsonDecode(anyResponse.body);
+          final anyKey = _extractBestYouTubeKey(anyData['results'] as List<dynamic>?);
+          if (anyKey != null) return anyKey;
+        }
+      } catch (_) {}
+    }
+
+    // Fallback to mock catalog trailers
+    return _mockTrailers[movieId];
+  }
+
+  String? _extractBestYouTubeKey(List<dynamic>? videos) {
+    if (videos == null || videos.isEmpty) return null;
+
+    final ytVideos = videos
+        .where((v) => v['site'] == 'YouTube' && v['key'] != null && (v['key'] as String).isNotEmpty)
+        .toList();
+    if (ytVideos.isEmpty) return null;
+
+    // 1. Official Trailer
+    final officialTrailer = ytVideos.firstWhere(
+      (v) => v['type'] == 'Trailer' && v['official'] == true,
+      orElse: () => null,
+    );
+    if (officialTrailer != null) return officialTrailer['key'] as String;
+
+    // 2. Any Trailer
+    final anyTrailer = ytVideos.firstWhere(
+      (v) => v['type'] == 'Trailer',
+      orElse: () => null,
+    );
+    if (anyTrailer != null) return anyTrailer['key'] as String;
+
+    // 3. Teaser
+    final teaser = ytVideos.firstWhere(
+      (v) => v['type'] == 'Teaser',
+      orElse: () => null,
+    );
+    if (teaser != null) return teaser['key'] as String;
+
+    // 4. Any YouTube video
+    return ytVideos.first['key'] as String;
+  }
+
+  static const Map<int, String> _mockTrailers = {
+    27205: 'Jvurpf91omw', // Inception
+    157336: 'zSWdZVtXT7E', // Interstellar
+    693134: 'Way9Dexny3w', // Dune 2
+    872585: 'uYPbbksJxIg', // Oppenheimer
+    496243: '5xH0R_44gkQ', // Parasite
+    155: 'EXeTwQWrcwY', // The Dark Knight
+    129: 'ByXuk9QqQkk', // Spirited Away
+    278: 'PLl99DlL6b4', // The Shawshank Redemption
+    329865: 'tFMo3UJ4B4g', // Arrival
+    206487: 'da4q0FpG_rU', // Predestination
+    335984: 'gCcx85zbxz4', // Blade Runner 2049
+    1124: 'o4gHCmTQDVI', // The Prestige
+    603: 'vKQi3bBA1y8', // The Matrix
+    11324: '5iaYLCiq5RM', // Shutter Island
+    220289: 'sEceDz1Rodc', // Coherence
+    264660: 'bggUmgeMCdc', // Ex Machina
+    152601: 'ne6p6HdPX8A', // Her
+    77: '4CV41hoyS8A', // Memento
+    577922: 'LdOM0x0WVSc', // Tenet
+    45612: 'mnJegNyAb1w', // Source Code
+    137113: 'vw61gCe2oqI', // Edge of Tomorrow
+  };
 
   /// High quality mock catalog with real TMDB paths for instant out-of-the-box demo
   static List<Movie> getMockMovies() {

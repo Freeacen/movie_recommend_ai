@@ -1,12 +1,16 @@
-import 'package:intl/intl.dart';
-
 class DateFormatter {
-  /// Returns a friendly formatted string such as "15 Ekim 2024" or "Oct 15, 2024"
+  static const List<String> _turkishMonths = [
+    'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+    'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'
+  ];
+
+  /// Returns a friendly formatted string such as "15 Ekim 2024"
   static String formatFriendly(String? isoString) {
     if (isoString == null || isoString.isEmpty) return 'Bilinmiyor';
     try {
       final date = DateTime.parse(isoString);
-      return DateFormat('d MMMM yyyy').format(date);
+      final monthName = _turkishMonths[date.month - 1];
+      return '${date.day} $monthName ${date.year}';
     } catch (_) {
       return isoString;
     }

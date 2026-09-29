@@ -115,7 +115,9 @@ async function getCachedTemplateRecommendation(userPrompt: string, excludedIds: 
     const { data: recommendations, error } = await supabase
       .from("cached_recommendations")
       .select("*, cached_movies(*)")
-      .limit(10);
+      .neq("is_rejected", true)
+      .order("quality_score", { ascending: false })
+      .limit(15);
 
     if (error || !recommendations || recommendations.length === 0) {
       return getHardcodedFallback();
@@ -127,8 +129,8 @@ async function getCachedTemplateRecommendation(userPrompt: string, excludedIds: 
     const movie = chosen.cached_movies;
 
     return {
-      recommended_title: movie?.title || "Inception (Başlangıç)",
-      movie_id: movie?.id || 27205,
+      recommended_title: movie?.title || chosen.movie_title || "Inception (Başlangıç)",
+      movie_id: movie?.id || chosen.movie_id || 27205,
       hook_genre: chosen.hook_genre,
       hook_mood: chosen.hook_mood,
       core_summary: chosen.core_summary,
@@ -171,18 +173,20 @@ serve(async (req) => {
     switch (action) {
       // 1. Personalized Movie Recommendation
       case "recommend": {
-        const { prompt, tasteProfile, watchedTitles = [], excludedIds = [] } = payload;
+        const { prompt, tasteProfile, watchedTitles = [], excludedIds = [], recentContext = "" } = payload;
 
         try {
-          const systemPrompt = `Sen CineAI uygulamasının seçkin film danışmanısın. Modelin: Groq Llama 3.3.
+          const systemPrompt = `Sen CineAI uygulamasının seçkin ve zeki film danışmanısın. Modelin: Groq Llama 3.3.
 Kullanıcının zevk profili: ${JSON.stringify(tasteProfile || {})}
-Daha önce izlediği filmler: ${watchedTitles.join(", ")}
-Kullanıcının anlık isteği: "${prompt}"
+Daha önce izlediği veya kütüphanesinde olan filmler: ${watchedTitles.join(", ")}
+${recentContext ? `Son Önerilen / İncelenen Film Bağlamı: ${recentContext}\n` : ""}Kullanıcının anlık isteği: "${prompt}"
 
-GÖREV:
-Kullanıcının isteklerine en uygun bir film öner.
-Daha önce izlediklerini tekrar önerme.
-Mekanik olma, 2-3 samimi, sinematik ve tutkulu cümleyle açıkla.
+GÖREV VE KURALLAR:
+1. Kullanıcının isteklerine en uygun bir film öner. Daha önce izlediklerini (${watchedTitles.slice(0, 15).join(", ")}) KESİNLİKLE tekrar önerme!
+2. BAĞLAM VE GEÇİŞ KURALLARI:
+   - Eğer kullanıcı önceki filmin devamını, daha yenisini, daha eskisini veya kadro/formatını soruyorsa ("daha yenisi yok mu", "devamı var mı", "ilk filmi mi", "animasyon olmasın"): Bu film serisindeki/evrenindeki henüz izlenmemiş diğer filmleri dikkate al.
+   - Eğer kullanıcı "başka bir şey", "başka bir film", "farklı bir yapım", "başka öneri", "bunu geç", "komedi olsun" diyorsa veya genel bir öneri istiyorsa: Önceki filme veya seriye ASLA takılı kalma! Seriden tamamen çık ve kullanıcının genel zevk profiline veya yeni isteğine göre dünya sinemasından taze, izlenmemiş bağımsız bir film öner.
+3. Mekanik olma, 2-3 samimi, sinematik ve tutkulu cümleyle açıkla.
 
 SADECE şu JSON şemasında yanıt ver:
 {
@@ -202,6 +206,25 @@ SADECE şu JSON şemasında yanıt ver:
             0.4,
             true
           );
+
+          // Auto-cache this recommendation in background as pending
+          if (supabase && groqResult?.recommended_title) {
+            try {
+              const movieId = payload.movieId || 0;
+              await supabase.from("cached_recommendations").upsert({
+                movie_id: movieId,
+                movie_title: groqResult.recommended_title,
+                hook_genre: groqResult.hook_genre || "Sinema zevkine tam uyan bir yapım",
+                hook_mood: groqResult.hook_mood || "Sürükleyici temposuyla",
+                core_summary: groqResult.core_summary || groqResult.reason || "",
+                target_aspects: groqResult.matching_aspects || [],
+                quality_score: 1,
+                is_verified: false,
+                is_rejected: false,
+                created_at: new Date().toISOString(),
+              }, { onConflict: "movie_id" });
+            } catch (_) {}
+          }
 
           return new Response(
             JSON.stringify({ success: true, data: { ...groqResult, is_fallback: false } }),
@@ -312,6 +335,37 @@ Cevabı SADECE JSON formatında ver:
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
+      }
+
+      // 4. Update Recommendation Feedback (Reinforcement signal for quality scoring)
+      case "update_feedback": {
+        const { movieId, positive = true, signal = "" } = payload;
+        if (supabase && movieId) {
+          try {
+            if (positive) {
+              await supabase
+                .from("cached_recommendations")
+                .update({ is_verified: true, quality_score: 5 })
+                .eq("movie_id", movieId);
+            } else {
+              await supabase
+                .from("cached_recommendations")
+                .update({ is_rejected: true, quality_score: -1 })
+                .eq("movie_id", movieId);
+            }
+            return new Response(JSON.stringify({ success: true }), {
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          } catch (err: any) {
+            return new Response(JSON.stringify({ success: false, error: err.message }), {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+        }
+        return new Response(JSON.stringify({ success: true, mocked: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       default:

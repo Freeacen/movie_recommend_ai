@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/utils/date_formatter.dart';
@@ -22,6 +23,12 @@ class MovieCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ratingValue = movie.userRating ?? movie.voteAverage;
+    final year = movie.releaseDate != null ? DateFormatter.formatYear(movie.releaseDate) : null;
+    final firstGenre = (movie.genres != null && movie.genres!.isNotEmpty)
+        ? movie.genres!.split(',').first.trim()
+        : null;
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
@@ -29,7 +36,10 @@ class MovieCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border, width: 1),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: AppColors.isDark ? 0.12 : 0.20),
+            width: 0.8,
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.35),
@@ -39,180 +49,163 @@ class MovieCard extends StatelessWidget {
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
+          fit: StackFit.expand,
           children: [
-            // Poster image with rating overlay
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  movie.posterUrl.isNotEmpty
-                      ? Image.network(
-                          movie.posterUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => _buildPlaceholder(),
-                          loadingBuilder: (context, child, loadingProgress) {
-                            if (loadingProgress == null) return child;
-                            return Container(
-                              color: AppColors.surfaceElevated,
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                              ),
-                            );
-                          },
-                        )
-                      : _buildPlaceholder(),
-
-                  // Gradient scrim
-                  Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    height: 60,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.transparent,
-                            AppColors.surface.withValues(alpha: 0.9),
-                          ],
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Rating chip
-                  if (movie.userRating != null || movie.voteAverage != null)
-                    Positioned(
-                      top: 10,
-                      right: 10,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppColors.background.withValues(alpha: 0.85),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: movie.userRating != null ? AppColors.primaryAmber : AppColors.border,
+            // 1. Full Poster Image (covers entire card)
+            movie.posterUrl.isNotEmpty
+                ? Image.network(
+                    movie.posterUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => _buildPlaceholder(),
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Container(
+                        color: AppColors.surfaceElevated,
+                        child: const Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.star_rounded,
-                              size: 14,
-                              color: movie.userRating != null ? AppColors.primaryAmber : AppColors.primaryBlue.withValues(alpha: 0.7),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              movie.userRating != null
-                                  ? '${movie.userRating!.toStringAsFixed(1)}${movie.userRating! > 5.0 ? " / 10" : " / 5"}'
-                                  : (movie.voteAverage?.toStringAsFixed(1) ?? ''),
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textHigh,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                      );
+                    },
+                  )
+                : _buildPlaceholder(),
 
-                  // Status badge
-                  if (movie.status != MovieStatus.none)
-                    Positioned(
-                      top: 10,
-                      left: 10,
-                      child: _buildStatusBadge(),
-                    ),
-                ],
+            // 2. Top-left Status Badge (if watched/watchlist)
+            if (movie.status != MovieStatus.none)
+              Positioned(
+                top: 8,
+                left: 8,
+                child: _buildStatusBadge(),
               ),
-            ),
 
-            // Details section
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    movie.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textHigh,
+            // 3. Top-right Rating Chip
+            if (ratingValue != null)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.65),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: movie.userRating != null
+                          ? AppColors.primaryBlue.withValues(alpha: 0.6)
+                          : Colors.white.withValues(alpha: 0.20),
+                      width: 0.8,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Row(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (movie.status == MovieStatus.watched && movie.recommendedAt != null) ...[
-                        const Icon(Icons.calendar_today_rounded, size: 11, color: AppColors.primaryAmber),
-                        const SizedBox(width: 4),
-                        Text(
-                          DateFormatter.formatFriendly(movie.recommendedAt),
-                          style: const TextStyle(fontSize: 11, color: AppColors.primaryAmber, fontWeight: FontWeight.w600),
+                      Icon(
+                        Icons.star_rounded,
+                        size: 13,
+                        color: movie.userRating != null
+                            ? AppColors.primaryBlue
+                            : AppColors.tmdbGold,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        ratingValue.toStringAsFixed(1),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: movie.userRating != null
+                              ? const Color(0xFF93C5FD)
+                              : Colors.white,
                         ),
-                        const SizedBox(width: 8),
-                      ] else if (movie.releaseDate != null) ...[
-                        Text(
-                          DateFormatter.formatYear(movie.releaseDate),
-                          style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      if (movie.genres != null && movie.genres!.isNotEmpty)
-                        Expanded(
-                          child: Text(
-                            movie.genres!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 11, color: AppColors.textLow),
-                          ),
-                        ),
+                      ),
                     ],
                   ),
+                ),
+              ),
 
-                  // Liked aspect tags if present
-                  if (showAspectTags && movie.likedAspects.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 4,
-                      runSpacing: 2,
-                      children: movie.likedAspects.take(2).map((aspect) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryIndigo.withValues(alpha: 0.18),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: AppColors.primaryIndigo.withValues(alpha: 0.4)),
+            // 4. Bottom Smooth Gradient Scrim Overlay (Afiş net, geçiş pürüzsüz)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(10, 36, 10, 10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.18),
+                      Colors.black.withValues(alpha: 0.55),
+                      Colors.black.withValues(alpha: 0.88),
+                    ],
+                    stops: const [0.0, 0.35, 0.70, 1.0],
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Movie Title
+                    Text(
+                      movie.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        letterSpacing: -0.2,
+                        shadows: [
+                          Shadow(
+                            color: Colors.black54,
+                            blurRadius: 4,
                           ),
-                          child: Text(
-                            aspect,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    // Minimal info: Year • Genre
+                    Row(
+                      children: [
+                        if (year != null) ...[
+                          Text(
+                            year,
                             style: TextStyle(
-                              fontSize: 10,
-                              color: AppColors.textAccentBlue,
+                              fontSize: 11,
+                              color: Colors.white.withValues(alpha: 0.85),
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                        );
-                      }).toList(),
+                          if (firstGenre != null) ...[
+                            Text(
+                              ' • ',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.white.withValues(alpha: 0.50),
+                              ),
+                            ),
+                          ],
+                        ],
+                        if (firstGenre != null)
+                          Expanded(
+                            child: Text(
+                              firstGenre,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.white.withValues(alpha: 0.70),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ],
-                ],
+                ),
               ),
             ),
           ],
@@ -245,18 +238,18 @@ class MovieCard extends StatelessWidget {
     switch (movie.status) {
       case MovieStatus.watched:
         label = 'İzlendi ✓';
-        bg = AppColors.accentNeon.withValues(alpha: 0.2);
+        bg = AppColors.accentNeon.withValues(alpha: 0.25);
         border = AppColors.accentNeon;
         break;
       case MovieStatus.watchlist:
         label = 'Listede 📌';
-        bg = AppColors.primaryAmber.withValues(alpha: 0.2);
-        border = AppColors.primaryAmber;
+        bg = AppColors.primaryBlue.withValues(alpha: 0.25);
+        border = AppColors.primaryBlue;
         break;
       case MovieStatus.recommended:
         label = 'Öneri ⭐';
-        bg = AppColors.primaryIndigo.withValues(alpha: 0.2);
-        border = AppColors.primaryIndigo;
+        bg = AppColors.secondaryBlue.withValues(alpha: 0.25);
+        border = AppColors.secondaryBlue;
         break;
       case MovieStatus.none:
         return const SizedBox.shrink();
@@ -271,10 +264,10 @@ class MovieCard extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(
+        style: const TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w700,
-          color: AppColors.textHigh,
+          color: Colors.white,
         ),
       ),
     );

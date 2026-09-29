@@ -37,8 +37,9 @@ class AppColors {
   static Color get surfaceHighlight => isDark ? darkSurfaceHighlight : lightSurfaceHighlight;
 
   // Accents (Consistent across both themes)
-  static const Color primaryBlue = Color(0xFF3B82F6); // Elektrik Okyanus Mavisi (Ana Vurgu)
+  static const Color primaryBlue = Color(0xFF3B82F6); // Elektrik Okyanus Mavisi (Ana Vurgu & Kullanıcı Puanı)
   static const Color primaryAmber = primaryBlue; // Geriye dönük tam uyumluluk referansı
+  static const Color tmdbGold = Color(0xFFFFB800); // Evrensel Altın Sarısı (Genel / TMDB Film Puanı)
   static const Color secondaryBlue = Color(0xFF1D4ED8); // Derin Safir / Kraliyet Mavisi
   static const Color primaryIndigo = secondaryBlue; // Mor yerine uyumlu safir mavi
   static const Color accentNeon = Color(0xFF10B981);

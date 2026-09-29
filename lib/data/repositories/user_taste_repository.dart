@@ -9,16 +9,10 @@ class UserTasteRepository {
   final AppDatabase _appDb;
 
   static UserTasteProfile _memoryProfile = const UserTasteProfile(
-    likedThemes: [
-      'zamanda yolculuk ve paradokslar',
-      'akıl yakan bilim kurgu',
-      'kara delik fiziği ve görelilik',
-      'Tarantino diyalogları',
-      'rüya ve hafıza kurguları',
-    ],
-    dislikedThemes: ['klişe sonlar'],
-    preferredGenres: ['Bilim Kurgu', 'Macera', 'Gerilim', 'Dram'],
-    lastUpdated: '2025-12-04T00:00:00.000Z',
+    likedThemes: [],
+    dislikedThemes: [],
+    preferredGenres: [],
+    lastUpdated: '',
   );
 
   static bool _hasLoadedFromStorage = false;
@@ -112,5 +106,22 @@ class UserTasteRepository {
     }
 
     return _memoryProfile;
+  }
+
+  /// Reset taste profile completely to empty state
+  Future<void> resetProfile() async {
+    _memoryProfile = const UserTasteProfile(
+      likedThemes: [],
+      dislikedThemes: [],
+      preferredGenres: [],
+      lastUpdated: '',
+    );
+    LocalStorageHelper.setItem(LocalStorageHelper.keyTasteProfile, '');
+    try {
+      final db = await _getSafeDb();
+      if (db != null) {
+        await db.delete('user_taste_profile');
+      }
+    } catch (_) {}
   }
 }

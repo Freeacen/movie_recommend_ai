@@ -31,6 +31,20 @@
 
   <title>movie_recommend_ai</title>
   <link rel="manifest" href="manifest.json">
+  <script>
+    // Handle OAuth popup callback: if this window was opened as a popup and receives auth tokens
+    if (window.opener && window.location.hash && window.location.hash.includes('access_token')) {
+      try {
+        window.opener.postMessage({
+          type: 'CINEAI_OAUTH_RESPONSE',
+          hash: window.location.hash
+        }, window.location.origin);
+      } catch (e) {
+        console.error('Error posting OAuth message:', e);
+      }
+      window.close();
+    }
+  </script>
 </head>
 <body>
   <!--

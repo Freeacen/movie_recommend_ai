@@ -28,6 +28,7 @@ class BackendAiService {
     required List<Movie> watchedMovies,
     required List<Movie> candidateCatalog,
     Set<int> excludedMovieIds = const {},
+    String? recentContext,
   }) async {
     // 1. Try Supabase Edge Function Groq Proxy if configured
     if (SupabaseConfig.isConfigured) {
@@ -40,6 +41,8 @@ class BackendAiService {
             'tasteProfile': tasteProfile.toMap(),
             'watchedTitles': watchedMovies.map((m) => m.title).toList(),
             'excludedIds': excludedMovieIds.toList(),
+            if (recentContext != null && recentContext.isNotEmpty)
+              'recentContext': recentContext,
           },
         };
 
@@ -71,6 +74,7 @@ class BackendAiService {
         watchedMovies: watchedMovies,
         candidateCatalog: candidateCatalog,
         excludedMovieIds: excludedMovieIds,
+        recentContext: recentContext,
       );
       if (groqResult != null) {
         return groqResult;
@@ -84,6 +88,7 @@ class BackendAiService {
       watchedMovies: watchedMovies,
       candidateCatalog: candidateCatalog,
       excludedMovieIds: excludedMovieIds,
+      recentContext: recentContext,
     );
   }
 
@@ -208,16 +213,409 @@ class BackendAiService {
     );
   }
 
+  /// Classify user intent using conversation context (Last Assistant Message + Active Movie + User Message)
+  Future<Map<String, dynamic>> classifyUserTurnWithContext({
+    required String userPrompt,
+    String? lastAssistantMessage,
+    Movie? activeMovie,
+    DateTime? now,
+  }) async {
+    final currentDate = now ?? DateTime.now();
+    final systemPrompt = '''
+Sen CineAI akıllı film asistanının bağlamsal niyet (intent) ve detay çıkarıcısısın.
+Kullanıcının son mesajını, önceki asistan mesajını ve konuşulan film bağlamını analiz ederek kullanıcının niyetini ve parametrelerini çıkar.
+
+Şu anki gerçek tarih: ${currentDate.toIso8601String().substring(0, 10)}
+Önceki Asistan Mesajı: "${lastAssistantMessage ?? 'Yok'}"
+Konuşulan / Önerilen Film: "${activeMovie?.title ?? 'Yok'}" (Çıkış Tarihi: ${activeMovie?.releaseDate ?? 'Bilinmiyor'})
+
+Kullanıcının Olası Niyetleri (intent):
+1. "WATCHED_CONFIRMATION": Kullanıcı önerilen filmi veya tek bir filmi daha önce izlediğini, seyrettiğini veya bitirdiğini kütüphaneye eklemek/puanlamak amacıyla doğal dille ifade ettiğinde. (DİKKAT: Kullanıcı bir seriden 'hangisini izleyeyim', 'sen seç', 'hangisini tekrar izleyeyim', 'hangisine başlayayım' gibi bir seçim veya tavsiye istiyorsa intent RECOMMENDATION_REQUEST olmalıdır, WATCHED_CONFIRMATION DEĞİL!)
+2. "POSTPONE_OR_NOT_WATCHED": Kullanıcı filmi henüz izlemediğini, şu an izleme fırsatı bulamadığını veya daha sonra izleyeceğini ifade ettiğinde.
+3. "START_EVALUATION": Asistanın filmi değerlendirme, puanlama veya konuşma teklifine herhangi bir olumlu yanıt verdiğinde, onayladığında ya da film hakkındaki fikirlerini paylaşmaya istekli olduğunu belirttiğinde.
+4. "LIBRARY_QUERY": Kullanıcı filmin kütüphanesine veya izleme listesine eklenip eklenmediğini, durumunu veya kütüphanesinde nelerin olduğunu sorduğunda.
+5. "REMOVE_FROM_LIBRARY": Kullanıcı filmi kütüphanesinden, izlediklerinden veya izleme listesinden silmek, çıkarmak, kaldırmak veya yanlışlıkla eklendiğini belirtip kütüphaneden temizlemek istediğinde.
+6. "RECOMMENDATION_REQUEST": Kullanıcı AÇIKÇA yeni bir film önerisi veya tavsiyesi istediğinde ("bana film öner", "ne izlesem", "tavsiye et", "izleyecek film bul"), bir seriden hangisini izlemesi gerektiğini sorduğunda ("hangisini izleyeyim", "sen seç") veya seriden seçim yapmanı istediğinde.
+DİKKAT 1 (OLUMSUZLUK / İSTEMEME): Eğer kullanıcı olumsuz bir ifade kullanıyorsa (örneğin "film önerme", "tavsiye istemiyorum", "öneri yapma", "don't recommend", "no recommendations", "sadece konuşalım", "film istemiyorum"), intent KESİNLİKLE RECOMMENDATION_REQUEST DEĞİLDİR, intent KESİNLİKLE "GENERAL_CHAT" olmalıdır!
+7. "GENERAL_CHAT": Kullanıcı sinema, belirli bir film veya yönetmen hakkında soru sorduğunda, filmleri kıyasladığında, film önermeni istemediğini belirttiğinde ("film önerme", "sadece sohbet edelim"), film dışı konularda sohbet ettiğinde veya selamlaştığında.
+8. "COMPOUND_WATCHED_AND_RECOMMEND": Kullanıcı tek bir mesajda hem bir filmi daha önce izlediğini/puanladığını belirtip hem de yeni bir film önerisi veya tavsiyesi istediğinde (Örn: "Matrix'i dün izledim 9 verdim, bana Nolan'dan film öner", "Interstellar'ı bitirdim harikaydı buna benzer ne izlesem").
+
+movie_title Çıkarım Kuralları:
+- Kullanıcı mesajında adı geçen filmi, seriyi veya yapımı tespit et ve "movie_title" alanına yaz. Kullanıcı yeni bir filmden bahsetmiyorsa ve mevcut aktif filmden konuşuluyorsa aktif filmi koru ("${activeMovie?.title ?? ''}").
+- ÇİFT FİLM KURALI: Eğer kullanıcı aynı cümlede hem izlediği hem de henüz izlemediği birden fazla filmden bahsediyorsa (örneğin "A'yı izledim ama B'yi izlemedim"), "movie_title" alanına KESİNLİKLE İZLEDİĞİNİ belirttiği filmi (A) yaz!
+- SERİ VE SAYI NORMALİZASYONU: Kullanıcı bir serinin ilk filmini belirtmek için gayriresmi takılar kullandıysa (örneğin "Matrix 1", "Hızlı ve Öfkeli 1", "Iron Man 1"), "movie_title" alanına filmin resmi ve bilinen adını ("The Matrix", "The Fast and the Furious", "Iron Man") yaz. Ancak filmin gerçek adında sayı varsa ("Air Force One", "F1", "1917", "Ocean's 11", "Se7en"), filmin öz adını koru.
+
+Zaman & Tarih Çıkarım Kuralı (watch_date):
+- Kullanıcı izleme zamanını herhangi bir şekilde belirttiyse (örneğin filmin vizyonuna göre "çıktığı tarihten sonra", "geçen yaz", "dün", "yıllar önce", "2021 sonbaharında"), bunu yaklaşık YYYY-MM-DD ISO formatında hesapla.
+- Örneğin film çıkış tarihi 2020-08 ise ve kullanıcı "çıktığı tarihten 1-2 ay sonra izlemiştim" dediyse watch_date: "2020-10-15" olmalıdır.
+- "çıktığında izlemiştim" dediyse filmin çıkış tarihi (${activeMovie?.releaseDate ?? '2020-01-01'}) olmalıdır.
+- Kullanıcı zaman belirtmediyse ve sadece izlediğini söylediyse null döndür.
+
+Puan & Değerlendirme Çıkarımı:
+- Kullanıcı herhangi bir puan ifadesi kullandıysa (örneğin 10 üzerinden puan, yıldız veya skor), bunu 1.0 - 10.0 arasında double sayı olarak "rating" alanına koy. Yoksa null.
+- Kullanıcı beğendiği veya beğenmediği yönlerden bahsettiyse "liked_aspects" ve "disliked_aspects" listelerine ekle.
+- Kullanıcı aynı mesajda film hakkında detaylı görüş veya eleştiri paylaştıysa "has_detailed_review": true yap.
+- is_rewatch_or_choice: Kullanıcı bir seriden hangisini izleyeceğini soruyorsa ("hangisini izleyeyim", "sen seç"), izlediği bir seriden tekrar izlemek için öneri istiyorsa ("birini tekrar izleyeceğim hangisi olsun") veya seriden seçim yapmanı istiyorsa true yap, aksi halde false.
+
+JSON Şeması (SADECE GEÇERLİ JSON DÖNDÜR):
+{
+  "intent": "WATCHED_CONFIRMATION" | "POSTPONE_OR_NOT_WATCHED" | "START_EVALUATION" | "LIBRARY_QUERY" | "REMOVE_FROM_LIBRARY" | "RECOMMENDATION_REQUEST" | "GENERAL_CHAT" | "COMPOUND_WATCHED_AND_RECOMMEND",
+  "movie_title": "${activeMovie?.title ?? ''}",
+  "is_rewatch_or_choice": false,
+  "watch_date": "YYYY-MM-DD" veya null,
+  "rating": null veya double,
+  "liked_aspects": [],
+  "disliked_aspects": [],
+  "has_detailed_review": false,
+  "review_summary": null
+}
+''';
+
+    final result = await _callGroqChat(
+      systemPrompt: systemPrompt,
+      userPrompt: userPrompt,
+      expectJson: true,
+    );
+
+    if (result != null && result['intent'] != null) {
+      return result;
+    }
+
+    return _localClassifyUserTurn(userPrompt, activeMovie, currentDate);
+  }
+
+  Map<String, dynamic> _localClassifyUserTurn(String userPrompt, Movie? activeMovie, DateTime now) {
+    final lower = userPrompt.toLowerCase().trim();
+
+    // 0. Remove from library
+    if (lower.contains('kütüphaneden sil') ||
+        lower.contains('kutuphaneden sil') ||
+        lower.contains('kütüphaneden çıkar') ||
+        lower.contains('kutuphaneden cikar') ||
+        lower.contains('kütüphanemden çıkar') ||
+        lower.contains('kütüphanemden sil') ||
+        lower.contains('listeden çıkar') ||
+        lower.contains('listeden cikar') ||
+        lower.contains('listemden kaldır') ||
+        lower.contains('yanlışlıkla ekle') ||
+        lower.contains('yanlislikla ekle')) {
+      return {
+        'intent': 'REMOVE_FROM_LIBRARY',
+        'movie_title': activeMovie?.title ?? '',
+        'watch_date': null,
+        'rating': null,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': false,
+      };
+    }
+
+    // 1. Library check query
+    if (lower.contains('kütüphaneye ekle') ||
+        lower.contains('kütüphanede var mı') ||
+        lower.contains('kutuphanede var mi') ||
+        lower.contains('ekledin mi') ||
+        lower.contains('eklendi mi') ||
+        lower.contains('listemde var mı')) {
+      return {
+        'intent': 'LIBRARY_QUERY',
+        'movie_title': activeMovie?.title ?? '',
+        'watch_date': null,
+        'rating': null,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': false,
+      };
+    }
+
+    // 2. Evaluation confirmation
+    if (lower == 'değerlendirelim' ||
+        lower == 'degerlendirelim' ||
+        lower.contains('sohbetle değerlendir') ||
+        lower.contains('puan verelim') ||
+        lower == 'olur' ||
+        lower == 'konuşalım') {
+      return {
+        'intent': 'START_EVALUATION',
+        'movie_title': activeMovie?.title ?? '',
+        'watch_date': null,
+        'rating': null,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': false,
+      };
+    }
+
+    // 3. Postpone or not watched
+    if (lower.contains('henüz değil') ||
+        lower.contains('henuz degil') ||
+        lower.contains('henüz izlemedim') ||
+        lower.contains('daha izlemedim') ||
+        lower.contains('sonra izlerim') ||
+        lower.contains('sonra izleyeceğim') ||
+        lower.contains('fırsatım olmadı') ||
+        lower.contains('vaktim olmadı')) {
+      return {
+        'intent': 'POSTPONE_OR_NOT_WATCHED',
+        'movie_title': activeMovie?.title ?? '',
+        'watch_date': null,
+        'rating': null,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': false,
+      };
+    }
+
+    // 4. Inquiries about a specific movie or comparisons ("duydun mu", "biliyor musun", "benzer mi")
+    final isSpecificMovieInquiry = lower.contains('duydun mu') ||
+        lower.contains('biliyor musun') ||
+        lower.contains('biliyor mu') ||
+        lower.contains('gördün mü') ||
+        lower.contains('benzer mi') ||
+        lower.contains('nasıl bir film') ||
+        lower.contains('hakkında ne düşünüyorsun') ||
+        lower.contains('konusu ne') ||
+        lower.contains('çıktı mı') ||
+        lower.contains('vizyonda mı') ||
+        lower.contains('demiştim') ||
+        lower.contains('bunda var mı') ||
+        lower.contains('bunda o var mı') ||
+        lower.contains('bunda yok') ||
+        lower.contains('bunda o yok') ||
+        lower.contains('bu o değil') ||
+        lower.contains('ne alaka') ||
+        lower.contains('alakası ne');
+
+    if (isSpecificMovieInquiry) {
+      String candidateTitle = activeMovie?.title ?? '';
+      final match = RegExp(r'([A-Za-z0-9ÇĞİÖŞÜçğıöşü\s\-]+?)\s+filmi', caseSensitive: false).firstMatch(userPrompt);
+      if (match != null) {
+        candidateTitle = match.group(1)?.trim() ?? candidateTitle;
+      }
+      return {
+        'intent': 'GENERAL_CHAT',
+        'movie_title': candidateTitle,
+        'watch_date': null,
+        'rating': null,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': false,
+      };
+    }
+
+    // Negation check: if user explicitly says NOT to recommend (e.g. "önerme", "tavsiye etme", "istemiyorum", "don't recommend")
+    final isRecommendationNegated = lower.contains('önerme') ||
+        lower.contains('onerme') ||
+        lower.contains('tavsiye etme') ||
+        lower.contains('tavsiye verme') ||
+        lower.contains('öneri yapma') ||
+        lower.contains('oneri yapma') ||
+        lower.contains('don\'t recommend') ||
+        lower.contains('no recommend') ||
+        (lower.contains('istemiyorum') && (lower.contains('öner') || lower.contains('tavsiye') || lower.contains('film önerme'))) ||
+        (lower.contains('istemem') && (lower.contains('öner') || lower.contains('tavsiye') || lower.contains('film önerme')));
+
+    final hasGenreMention = lower.contains('bilim kurgu') ||
+        lower.contains('bilimkurgu') ||
+        lower.contains('korku') ||
+        lower.contains('gerilim') ||
+        lower.contains('komedi') ||
+        lower.contains('aksiyon') ||
+        lower.contains('dram') ||
+        lower.contains('romantik') ||
+        lower.contains('macera') ||
+        lower.contains('animasyon') ||
+        lower.contains('suç') ||
+        lower.contains('suc') ||
+        lower.contains('fantastik') ||
+        lower.contains('gizem') ||
+        lower.contains('western') ||
+        lower.contains('belgesel') ||
+        lower.contains('anime') ||
+        lower.contains('süper kahraman') ||
+        lower.contains('super kahraman');
+
+    final hasDesireOrSearchExpression = lower.contains('istiyorum') ||
+        lower.contains('istiyom') ||
+        lower.contains('istiyoruz') ||
+        lower.contains('bakarım') ||
+        lower.contains('baksam') ||
+        lower.contains('bakalım') ||
+        lower.contains('gelsin') ||
+        lower.contains('ver') ||
+        lower.contains('bul') ||
+        lower.contains('arıyorum') ||
+        lower.contains('ariyorum') ||
+        lower.contains('lazım') ||
+        lower.contains('lazim') ||
+        lower.contains('var mı') ||
+        lower.contains('var mi') ||
+        lower.contains('ne izle') ||
+        lower.contains('izlesem') ||
+        lower.contains('izlesek') ||
+        lower.contains('izlemek') ||
+        lower.contains('izleyesim') ||
+        lower.contains('canım');
+
+    // 5. Check if asking for recommendation
+    final isAskingRecommendationOrChoice = !isRecommendationNegated && (
+        lower.contains('öner') ||
+        lower.contains('oneri') ||
+        lower.contains('tavsiye') ||
+        lower.contains('hangisi') ||
+        lower.contains('hangisine') ||
+        lower.contains('seç') ||
+        lower.contains('sec') ||
+        lower.contains('izleyeyim') ||
+        lower.contains('izleyelim') ||
+        lower.contains('başlayayım') ||
+        lower.contains('which') ||
+        lower.contains('choose') ||
+        lower.contains('film öner') ||
+        lower.contains('başka bir') ||
+        lower.contains('farklı bir') ||
+        lower.contains('yeni bir') ||
+        hasDesireOrSearchExpression ||
+        hasGenreMention);
+
+    // 5a. Compound watched confirmation + recommendation request (e.g. "Matrix'i dün izledim 9 verdim, bana Nolan'dan film öner")
+    final isRewatchOrChoice = (lower.contains('hangisi') ||
+        lower.contains('seç') ||
+        lower.contains('sec') ||
+        lower.contains('tekrar') ||
+        lower.contains('which') ||
+        lower.contains('choose'));
+
+    final hasWatchedConfirmation = lower.contains('izledim') ||
+        lower.contains('izlemiştim') ||
+        lower.contains('seyrettim') ||
+        lower.contains('seyretmiştim') ||
+        lower.contains('bitirdim');
+
+    if (!isRewatchOrChoice && hasWatchedConfirmation && isAskingRecommendationOrChoice) {
+      String? inferredDate;
+      if (lower.contains('dün') || lower.contains('dun')) {
+        inferredDate = now.subtract(const Duration(days: 1)).toIso8601String().substring(0, 10);
+      } else if (lower.contains('geçen hafta') || lower.contains('gecen hafta')) {
+        inferredDate = now.subtract(const Duration(days: 7)).toIso8601String().substring(0, 10);
+      } else if (lower.contains('çıktığında') || lower.contains('vizyonda')) {
+        inferredDate = activeMovie?.releaseDate;
+      } else if (lower.contains('bugün') || lower.contains('az önce') || lower.contains('yeni bitirdim') || lower.contains('şimdi bitirdim') || lower.contains('şimdi izledim')) {
+        inferredDate = now.toIso8601String().substring(0, 10);
+      }
+
+      String identifiedTitle = '';
+      final watchedMatch = RegExp(r"([A-Za-z0-9ÇĞİÖŞÜçğıöşü\s\-':]+?)(?:'i|'ı|'u|'ü|'yi|'yı|'yu|'yü|\s)\s*(?:dün|bugün|yeni|az önce)?\s*(?:izledim|izlemiştim|seyrettim|bitirdim)", caseSensitive: false).firstMatch(userPrompt);
+      if (watchedMatch != null) {
+        identifiedTitle = watchedMatch.group(1)?.trim() ?? '';
+      }
+      if (identifiedTitle.isEmpty) {
+        identifiedTitle = activeMovie?.title ?? '';
+      }
+
+      final explicitRating = _extractExplicitRating(userPrompt);
+
+      return {
+        'intent': 'COMPOUND_WATCHED_AND_RECOMMEND',
+        'movie_title': identifiedTitle,
+        'is_rewatch_or_choice': false,
+        'watch_date': inferredDate,
+        'rating': explicitRating,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': explicitRating != null,
+      };
+    }
+
+    // 6. Recommendation request or franchise selection (checks this BEFORE watched confirmation)
+    if (isAskingRecommendationOrChoice) {
+      return {
+        'intent': 'RECOMMENDATION_REQUEST',
+        'movie_title': activeMovie?.title ?? '',
+        'is_rewatch_or_choice': isRewatchOrChoice,
+        'watch_date': null,
+        'rating': null,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': false,
+      };
+    }
+
+    // 6. Watched confirmation
+    if (lower.contains('izledim') ||
+        lower.contains('izlemiştim') ||
+        lower.contains('seyrettim') ||
+        lower.contains('seyretmiştim') ||
+        lower.contains('bitirdim')) {
+      String? inferredDate;
+      if (lower.contains('dün') || lower.contains('dun')) {
+        inferredDate = now.subtract(const Duration(days: 1)).toIso8601String().substring(0, 10);
+      } else if (lower.contains('geçen hafta') || lower.contains('gecen hafta')) {
+        inferredDate = now.subtract(const Duration(days: 7)).toIso8601String().substring(0, 10);
+      } else if (lower.contains('çıktığında') || lower.contains('vizyonda')) {
+        inferredDate = activeMovie?.releaseDate;
+      } else if (lower.contains('bugün') || lower.contains('az önce') || lower.contains('yeni bitirdim') || lower.contains('şimdi bitirdim') || lower.contains('şimdi izledim')) {
+        inferredDate = now.toIso8601String().substring(0, 10);
+      } else if (lower.contains('sonra') && activeMovie?.releaseDate != null) {
+        // e.g. "çıktığı tarihten bir veya 2 ay sonra"
+        final relDate = DateTime.tryParse(activeMovie!.releaseDate!);
+        if (relDate != null) {
+          inferredDate = relDate.add(const Duration(days: 60)).toIso8601String().substring(0, 10);
+        }
+      }
+
+      return {
+        'intent': 'WATCHED_CONFIRMATION',
+        'movie_title': activeMovie?.title ?? '',
+        'watch_date': inferredDate,
+        'rating': null,
+        'liked_aspects': <String>[],
+        'disliked_aspects': <String>[],
+        'has_detailed_review': false,
+      };
+    }
+
+    return {
+      'intent': 'GENERAL_CHAT',
+      'movie_title': activeMovie?.title ?? '',
+      'watch_date': null,
+      'rating': null,
+      'liked_aspects': <String>[],
+      'disliked_aspects': <String>[],
+      'has_detailed_review': false,
+    };
+  }
+
   /// Free-form conversational chat response using Groq
   Future<String?> generateChatResponse(String userPrompt, {String? recentContext}) async {
     final systemPrompt = '''
-Sen CineAI adlı zeki, samimi ve kültürlü bir yapay zeka sinema danışmanısın.
-Kullanıcı seninle sohbet ediyor veya sinema, yönetmenler, film önerileri hakkında konuşuyor ya da önceki önerilerin hakkında sitem/eleştiri yöneltiyor.
-${recentContext != null && recentContext.isNotEmpty ? 'Önceki Konuşma ve İncelenen Film Bağlamı: $recentContext\n' : ''}
-Eğer kullanıcı önceki önerinin alakasız olduğunu söylerse (örneğin "ne alaka ya", "ben bunu sormadım", "alakasız oldu") hatanı samimiyetle kabul et, tatlı bir dille özür dile ve hemen kullanıcının gerçekte istediği konuya dönerek en iyi seçenekleri sun.
-Eğer kullanıcı incelenen bir filmin devamını veya daha yenisini ("daha yenisi yok mu", "daha yeni var mı") soruyorsa ve o seride daha yeni film çıkmamışsa, bunu sinema kültürüyle dürüstçe açıkla (örn: "Örümcek-Adam serisinde Eve Dönüş Yok 2021 yapımıdır ve şu anki en yeni canlı çekim filmidir, sonraki film henüz yapım aşamasında"). Ardından evrendeki diğer filmleri veya benzer alternatifleri öner.
-Kullanıcının sorusuna akıcı, samimi, yardımsever ve bilgili bir Türkçe ile yanıt ver.
-Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
+Sen CineAI adlı zeki, samimi, kültürlü ve tutkulu bir yapay zeka sinema danışmanısın.
+Uzmanlık alanın: Sinema, filmler, yönetmenler, oyuncular, senaryolar, film incelemeleri ve önerilerdir.
+${recentContext != null && recentContext.isNotEmpty ? '\nBağlam ve Doğrulanmış Film Bilgileri:\n$recentContext\n' : ''}
+
+KİMLİK VE ALAN SINIRLARI (DOMAIN GUARDRAILS):
+1. Sen yalnızca bir sinema ve film asistanısın. Sohbetin odağını her zaman sinemada tut.
+2. Eğer kullanıcı tamamen sinema dışı konulardan (hava durumu, yemek tarifleri, siyaset, günlük dertler, okul/iş, matematik vb.) bahsederse, kullanıcıyı kesinlikle terslemeden, esprili ve sıcak bir dille konuyu tekrar sinemaya bağla:
+   Örnek: "Ben CineAI, senin sinema ve film danışmanınım! Film dünyasının büyüsünden çok uzaklaşmayalım; ama istersen bu havaya veya bu ruh haline mükemmel gidecek harika bir film önerisiyle devam edebiliriz! 🍿"
+
+BAĞLAM VE REFERANS FİLM GÜVENCESİ (FALSE-POSITIVE ÖNLEYİCİ):
+1. Sana yukarıda verilen "Bağlam ve Doğrulanmış Film Bilgileri" yalnızca olası bir arka plan referansıdır.
+2. Eğer kullanıcının mesajı bariz bir şekilde bu film hakkında değilse (kullanıcı sadece genel bir sohbet, duygu durumu, günlük bir konu veya başka bir şeyden bahsediyorsa ve bu filmi bizzat sormamışsa), bu filmi ZORLA konuşmaya dahil etme, kullanıcı bu filmi sormuş gibi davranma.
+3. Yalnızca kullanıcının mesajı gerçekten o filmle, o evrenle veya kıyaslamayla ilgiliyse bu bilgiyi kullan.
+
+HALÜSİNASYON VE UYDURMA YASAKTIR:
+1. Bilmediğin veya sana bilgisi verilmeyen bir film adı geçerse, adını motamot Türkçeye çevirip hayali hayvan veya çocukça uydurma konular (örneğin "kuyruklu fare gizli ajan animasyonu" gibi) KESİNLİKLE uydurma!
+2. Eğer bir film hakkında doğrulanmış bilgin yoksa veya film çok yeniyse/yapım aşamasındaysa, dürüstçe "Bu yapım hakkında elimdeki bilgiler sınırlı veya henüz yapım aşamasında olabilir" diyerek kullanıcının ne bildiğini sor.
+
+SPOILER (SÜRPRİZ BOZAN) KESİNLİKLE YASAKTIR:
+1. Film önerilerinde, film analizlerinde ve sohbetlerde filmlerin sonunu, kilit ters köşe (twist) sürprizlerini veya katilin/gizin kim olduğunu ASLA açık etme!
+2. Merak uyandırıcı, atmosferi ve çatışmayı anlatan ama sürprizi kullanıcıya saklayan bir sinematik anlatım kullan.
+
+FORMAT VE METİN KURALLARI:
+1. KESİNLİKLE Markdown tablosu (| Sütun | Sütun |) KULLANMA. Mobil ve dar ekranlarda tablolar bozulur.
+2. KESİNLİKLE HTML etiketleri (<br>, <p> vb.) KULLANMA.
+3. Kıyaslama veya anlatımları akıcı paragraflar, kalın vurgular (**film adı**) ve şık madde işaretleri (•) kullanarak yap.
+4. Dil her zaman sıcak, akıcı ve samimi Türkçe olsun.
 ''';
 
     final result = await _callGroqChat(
@@ -235,12 +633,31 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
   String _localChatResponse(String userPrompt, [String? recentContext]) {
     final lower = userPrompt.toLowerCase();
     if (lower.contains('daha yeni') || lower.contains('daha yenisi') || lower.contains('en yenisi') || lower.contains('yok mu')) {
-      return 'İncelediğimiz film serisinde bundan daha yeni çıkmış bir canlı çekim film henüz vizyona girmedi (yeni projeler hazırlık aşamasında). Dilersen aynı evrendeki diğer filmlere veya benzer tonda yeni süper kahraman maceralarına göz atabiliriz! 🍿';
+      return 'İncelediğimiz film serisinde bundan daha yeni çıkmış bir canlı çekim film henüz vizyona girmedi (yeni projeler hazırlık aşamasında). Dilersen aynı evrendeki diğer filmlere veya benzer tonda yeni maceralara göz atabiliriz! 🍿';
     }
-    if (lower.contains('ne alaka') || lower.contains('alakası ne') || lower.contains('alakasız')) {
+    if (lower.contains('demiştim') ||
+        lower.contains('bunda var mı') ||
+        lower.contains('bunda o var mı') ||
+        lower.contains('bunda yok') ||
+        lower.contains('bunda o yok') ||
+        lower.contains('bu o değil') ||
+        lower.contains('ne alaka') ||
+        lower.contains('alakası ne') ||
+        lower.contains('alakasız') ||
+        lower.contains('uyuşmuyor') ||
+        lower.contains('değil ki')) {
+      final movieName = (recentContext != null && recentContext.contains('Kullanıcının daha önce incelediği / konuşulan film: '))
+          ? recentContext.split('Kullanıcının daha önce incelediği / konuşulan film: ')[1].split('(')[0].trim()
+          : '';
+      if (movieName.isNotEmpty) {
+        return 'Haklısın, **$movieName** tam olarak aradığın türle veya istediğinle örtüşmedi, kusura bakma! 🎬 Şimdi doğrudan istediğin türden harika bir yapım önerelim. Nasıl bir film istersin?';
+      }
       return 'Haklısın, bir önceki önerim tam olarak istediğinle örtüşmedi, kusura bakma! Şimdi doğrudan istediğin seriden veya türden harika bir öneri hazırlayalım. Aklındaki detayları söylemen yeterli. 🎬';
     }
-    return 'Sinema konusunda her zaman yanındayım! İstediğin türe, yönetmene veya karaktere göre en uygun filmleri keşfetmek için buradayım.';
+    if (lower.contains('hava') || lower.contains('yemek') || lower.contains('tarif') || lower.contains('matematik') || lower.contains('siyaset')) {
+      return 'Ben CineAI, senin sinema ve film danışmanınım! 🎬 Film dünyasının büyüsünden uzaklaşmayalım; ama istersen bu ruh haline mükemmel gidecek harika bir film önerisi yapabilirim! 🍿';
+    }
+    return 'Sinema konusunda her zaman yanındayım! İstediğin türe, yönetmene veya karaktere göre en uygun filmleri keşfetmek için buradayım. 🎬';
   }
 
   /// Generate warm re-watch nudge message for an older favorite
@@ -255,6 +672,73 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
     return 'Aradığın kriterlere uygun yepyeni bir film yerine sana **${movie.title}** filmini hatırlatmak istedim.$aspectsInfo\n\nBu unutulmaz favorini yeniden izleyerek nostaljik bir sinema gecesi yapmaya ne dersin? 🍿';
   }
 
+  /// Reinforce or reject cached recommendation based on real user actions
+  /// Positive signals: User adds to watchlist, rates >= 7.0
+  /// Negative signals: User objects ("ne alaka", "alakasız"), rates < 5.0
+  Future<void> updateRecommendationFeedback({
+    required int movieId,
+    required bool positive,
+    String? signal,
+  }) async {
+    if (!SupabaseConfig.isConfigured || movieId == 0) return;
+
+    try {
+      final uri = Uri.parse(SupabaseConfig.edgeFunctionProxyUrl);
+      final payload = {
+        'action': 'update_feedback',
+        'payload': {
+          'movieId': movieId,
+          'positive': positive,
+          'signal': signal ?? '',
+        },
+      };
+
+      await _client.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SupabaseConfig.defaultSupabaseAnonKey,
+        },
+        body: jsonEncode(payload),
+      ).timeout(const Duration(seconds: 4));
+    } catch (_) {}
+  }
+
+  /// Cache high quality verified movie pitch into Supabase
+  Future<void> recordRecommendationInCache({
+    required Movie movie,
+    required String reason,
+    required List<String> matchingAspects,
+  }) async {
+    if (!SupabaseConfig.isConfigured || movie.id == 0) return;
+
+    try {
+      final uri = Uri.parse('${SupabaseConfig.defaultSupabaseUrl}/rest/v1/cached_recommendations');
+      await _client.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SupabaseConfig.defaultSupabaseAnonKey,
+          'Authorization': 'Bearer ${SupabaseConfig.defaultSupabaseAnonKey}',
+          'Prefer': 'resolution=merge-duplicates',
+        },
+        body: jsonEncode([
+          {
+            'movie_id': movie.id,
+            'movie_title': movie.title,
+            'hook_genre': 'Sinema zevkine tam uyan bir yapım olarak',
+            'hook_mood': 'Sürükleyici temposuyla',
+            'core_summary': reason,
+            'target_aspects': matchingAspects,
+            'quality_score': 1,
+            'is_verified': false,
+            'is_rejected': false,
+          }
+        ]),
+      ).timeout(const Duration(seconds: 5));
+    } catch (_) {}
+  }
+
   // --------------------------------------------------------------------------
   // Local Assembler & Heuristic Analyzers (Zero-Latency Offline Mode)
   // --------------------------------------------------------------------------
@@ -264,6 +748,7 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
     required List<Movie> watchedMovies,
     required List<Movie> candidateCatalog,
     required Set<int> excludedMovieIds,
+    String? recentContext,
   }) {
     final watchedIds = watchedMovies.map((m) => m.id).toSet();
     final watchedTitles = watchedMovies.map((m) => m.title.toLowerCase().trim()).toSet();
@@ -302,6 +787,59 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
     var unproposed = available.where((m) => !excludedMovieIds.contains(m.id)).toList();
     var candidates = unproposed.isNotEmpty ? unproposed : available;
 
+    final isDifferentRequest = lowerPrompt.contains('başka') ||
+        lowerPrompt.contains('farklı') ||
+        lowerPrompt.contains('değiştir') ||
+        lowerPrompt.contains('boşver') ||
+        lowerPrompt.contains('çıkmak istiyor') ||
+        lowerPrompt.contains('önceki serinin kendisini önerme') ||
+        lowerPrompt.contains('kesinlikle bağlı kalma') ||
+        lowerPrompt.contains('geçelim');
+
+    // Extract previous movie if mentioned in system context: e.g. 'Kullanıcı önceki "Örümcek-Adam" serisinden çıkmak istiyor'
+    String? previousMentioned;
+    if (lowerPrompt.contains('kullanıcı önceki "')) {
+      final parts = lowerPrompt.split('kullanıcı önceki "');
+      if (parts.length > 1) {
+        previousMentioned = parts[1].split('"').first.toLowerCase().trim();
+      }
+    }
+
+    if (previousMentioned != null && previousMentioned.isNotEmpty) {
+      final filteredOutPrev = candidates.where((m) {
+        final t = m.title.toLowerCase();
+        return !t.contains(previousMentioned!) && !previousMentioned!.contains(t);
+      }).toList();
+      if (filteredOutPrev.isNotEmpty) {
+        candidates = filteredOutPrev;
+      }
+    }
+
+    if (isDifferentRequest && recentContext != null && recentContext.isNotEmpty) {
+      final recentLower = recentContext.toLowerCase();
+      final filteredOutRecent = candidates.where((m) {
+        final t = m.title.toLowerCase();
+        return !recentLower.contains(t) && !t.contains(recentLower);
+      }).toList();
+      if (filteredOutRecent.isNotEmpty) {
+        candidates = filteredOutRecent;
+      }
+    }
+
+    if (lowerPrompt.contains('örümcek adam olmasın') || lowerPrompt.contains('örümcek-adam olmasın')) {
+      final noSpider = candidates.where((m) => !m.title.toLowerCase().contains('örümcek') && !m.title.toLowerCase().contains('spider')).toList();
+      if (noSpider.isNotEmpty) {
+        candidates = noSpider;
+      }
+    }
+
+    if (lowerPrompt.contains('batman olmasın')) {
+      final noBatman = candidates.where((m) => !m.title.toLowerCase().contains('batman')).toList();
+      if (noBatman.isNotEmpty) {
+        candidates = noBatman;
+      }
+    }
+
     if (rejectAnimation) {
       candidates = candidates.where((m) {
         final g = (m.genres ?? '').toLowerCase();
@@ -314,7 +852,7 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
     final promptWords = userPrompt.toLowerCase()
         .replaceAll(RegExp(r'[?!.,:;]'), ' ')
         .split(' ')
-        .where((w) => w.length > 2 && !['film', 'filmi', 'filmleri', 'öner', 'izle', 'bana', 'gibi', 'neler', 'bişey', 'animasyon', 'sevmiyorum', 'istemiyorum', 'olmasın', 'canlı', 'aksiyon'].contains(w))
+        .where((w) => w.length > 2 && !['film', 'filmi', 'filmleri', 'öner', 'izle', 'bana', 'gibi', 'neler', 'bişey', 'animasyon', 'sevmiyorum', 'istemiyorum', 'olmasın', 'canlı', 'aksiyon', 'başka', 'farklı', 'tane', 'şey', 'bunu', 'şunu', 'öneri', 'yap'].contains(w))
         .toList();
 
     Movie? chosen;
@@ -350,11 +888,14 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
       chosen = candidates.first;
     }
 
+    final genreDesc = (chosen.genres != null && chosen.genres!.isNotEmpty)
+        ? '${chosen.genres} türündeki sinematik tercihlerine uygun'
+        : 'Sinema zevkine uygun';
     final assembled = _assembler.assemble(
       movie: chosen,
       tasteProfile: tasteProfile,
-      templateHookGenre: 'Sinema zevkine ve akıl yakan kurgu tercihlerine tam uyan bir başyapıt olarak',
-      templateHookMood: 'Nefes kesici temposu ve derin atmosferiyle',
+      templateHookGenre: '$genreDesc bir yapım olarak',
+      templateHookMood: 'Etkileyici temposu ve atmosferiyle',
       templateCoreSummary: chosen.overview,
     );
 
@@ -421,12 +962,18 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
   }
 
   static const List<String> supportedGroqModels = [
-    'groq/compound-mini',
-    'qwen/qwen3.8-27b',
-    'openai/gpt-oss-20b',
-    'groq/compound',
+    'openai/gpt-oss-120b',
     'llama-3.3-70b-versatile',
+    'openai/gpt-oss-20b',
+    'llama-3.1-8b-instant',
+    'qwen/qwen3.8-27b',
+    'llama3-70b-8192',
+    'llama3-8b-8192',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it',
   ];
+
+  static String? _lastWorkingGroqModel;
 
   // --------------------------------------------------------------------------
   // Groq API Key Rotation Pool & Fast Inference
@@ -438,10 +985,20 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
   }) async {
     if (SupabaseConfig.defaultGroqApiKeys.isEmpty) return null;
 
+    final modelList = <String>[];
+    if (_lastWorkingGroqModel != null && supportedGroqModels.contains(_lastWorkingGroqModel)) {
+      modelList.add(_lastWorkingGroqModel!);
+    }
+    for (final m in supportedGroqModels) {
+      if (!modelList.contains(m)) {
+        modelList.add(m);
+      }
+    }
+
     for (final apiKey in SupabaseConfig.defaultGroqApiKeys) {
       if (apiKey.isEmpty || apiKey.contains('YOUR_GROQ')) continue;
 
-      for (final model in supportedGroqModels) {
+      for (final model in modelList) {
         try {
           final uri = Uri.parse('https://api.groq.com/openai/v1/chat/completions');
           final body = {
@@ -459,15 +1016,27 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
             headers: {
               'Content-Type': 'application/json',
               'Authorization': 'Bearer $apiKey',
+              'User-Agent': 'CineAI/1.0',
             },
             body: jsonEncode(body),
-          ).timeout(const Duration(seconds: 10));
+          ).timeout(const Duration(seconds: 12));
 
           if (response.statusCode == 200) {
+            _lastWorkingGroqModel = model;
             final decoded = jsonDecode(response.body);
             final content = decoded['choices']?[0]?['message']?['content']?.toString() ?? '';
             if (expectJson) {
-              return jsonDecode(content) as Map<String, dynamic>;
+              String cleaned = content.trim();
+              if (cleaned.startsWith('```json')) {
+                cleaned = cleaned.substring(7);
+              } else if (cleaned.startsWith('```')) {
+                cleaned = cleaned.substring(3);
+              }
+              if (cleaned.endsWith('```')) {
+                cleaned = cleaned.substring(0, cleaned.length - 3);
+              }
+              cleaned = cleaned.trim();
+              return jsonDecode(cleaned) as Map<String, dynamic>;
             }
             return {'content': content};
           }
@@ -485,6 +1054,7 @@ Cevabını Markdown formatında, sıcak ve net bir tonla yaz.
     required List<Movie> watchedMovies,
     required List<Movie> candidateCatalog,
     Set<int> excludedMovieIds = const {},
+    String? recentContext,
   }) async {
     final candidatesList = candidateCatalog
         .where((m) => !excludedMovieIds.contains(m.id))
@@ -506,28 +1076,32 @@ A) Kademe 1 - Mikro Düzeltme (Seri İçi Format/Sıra Değişimi):
 Kullanıcı sadece mevcut serinin formatına (örn: "animasyon olmasın", "çizim bu", "canlı aksiyon olsun", "daha eskisi") itiraz ediyorsa: Konuşulan seriden KESİNLİKLE çıkma! Seriden kullanıcının format isteğine uyan (örn: animasyon yerine canlı aksiyon Spider-Man) bir film öner.
 B) Kademe 2 - Tematik Akraba / Köprü (Benzer Ruh, Farklı Evren):
 Kullanıcı "buna benzer ama başka seri", "örümcek adam olmasın ama süper kahraman olsun", "bunun gibi aksiyon ama Marvel olmasın" diyorsa: Mevcut seriden çık, ancak benzer tematik ruhtaki akraba evrene (örn: The Batman, Kick-Ass, Watchmen) köprü kur.
-C) Kademe 3 - Tam Sıfırlama / Başka Tarz (Evrenden Kesin Çıkış):
-Kullanıcı "başka tarz bir şey", "farklı bir tür", "bu seriyi boşver", "bunu geçelim", "komedi olsun", "korku izleyelim" diyorsa: Önceki seriyi ve evreni KESİNLİKLE UNUT VE BIRAK! Kullanıcının yeni istediği türe veya genel zevk profiline göre dünya sinemasından bağımsız taze bir film öner. Asla eski seriye saplanıp kalma!
+C) Kademe 3 - Tam Sıfırlama / Başka Tarz / Yeni Öneri (Evrenden Kesin Çıkış):
+Kullanıcı "başka tarz bir şey", "farklı bir tür", "bu seriyi boşver", "bunu geçelim", "komedi olsun", "korku izleyelim", "başka bir şey öner", "başka bir film", "farklı bir yapım", "başka öneri yap" diyorsa veya genel bir film istiyorsa: Önceki seriyi ve evreni KESİNLİKLE UNUT VE BIRAK! Kullanıcının yeni istediği türe veya genel zevk profiline göre dünya sinemasından bağımsız taze bir film öner. Asla eski seriye saplanıp kalma!
 
-🚨 2 NUMARALI KURAL (YASAKLI / İZLENEN FİLMLER):
-Kullanıcının daha önce izlediği veya kütüphanesinde olan filmleri ("YASAKLI / İZLENEN FİLMLER LİSTESİ") KESİNLİKLE VE ASLA ÖNERME!
-Her zaman kullanıcının henüz izlemediği, YEPYENİ, taze bir film öner.
+🚨 2 NUMARALI KURAL (İZLENEN FİLMLER VE TEKRAR İZLEME):
+- Kullanıcı genel bir öneri istiyorsa, daha önce izlediği filmleri KESİNLİKLE önerme; yeni, taze bir film öner.
+- ANCAK kullanıcı açıkça belirli bir seriyi daha önce izlediğini belirtip o seriden "hangisini tekrar izleyeyim", "hangisini seçeyim", "bu seriden hangisini önerirsin" gibi bir SEÇİM istiyorsa; o serideki en iyi, en keyifli filmi seç ve neden bu bölümü izlemesi gerektiğini gerekçesiyle açıkla!
+
+🚨 3 NUMARALI KURAL (SPOILER KESİNLİKLE YASAKTIR):
+- Öneri gerekçesinde ("reason") filmin kilit sürprizlerini, ters köşelerini (plot twists) veya finalini KESİNLİKLE AÇIK ETME!
+- İzleyicide merak uyandıran, atmosferi, temayı ve çatışmayı öne çıkaran bir dille yaz.
 
 Cevabını SADECE geçerli bir JSON nesnesi olarak döndür:
 {
   "selected_id": 12345, // Katalogdan seçildiyse ID'si, dışarıdan ise 0
   "title": "Film Adı",
-  "reason": "Kullanıcının o anki spesifik isteğine özel, samimi, neden bu filmi seçtiğini açıklayan 2-3 cümlelik öneri gerekçesi.",
+  "reason": "Kullanıcının o anki spesifik isteğine özel, samimi, neden bu filmi seçtiğini açıklayan 2-3 cümlelik öneri gerekçesi (asla spoiler içermez).",
   "matching_aspects": ["sevilen tema 1", "sevilen tema 2"]
 }
 ''';
 
     final userContent = '''
-Kullanıcı İsteği: "$userPrompt"
+${recentContext != null && recentContext.isNotEmpty ? 'Son Önerilen / İncelenen Film Bağlamı: $recentContext\n' : ''}Kullanıcı İsteği: "$userPrompt"
 Beğendiği Temalar: ${tasteProfile.likedThemes.join(', ')}
 Sevdiği Türler: ${tasteProfile.preferredGenres.join(', ')}
 
-⛔ KULLANICININ ZATEN İZLEDİĞİ YASAKLI FİLMLER (KESİNLİKLE BUNLARDAN BİRİNİ ÖNERME):
+⛔ KULLANICININ ZATEN İZLEDİĞİ YASAKLI FİLMLER (KESİNLİKLE BUNLARDAN BİRİNİ ÖNERME - Kullanıcı tekrar izlemek istemediyse):
 ${watchedTitlesList.join(', ')}
 
 Aday Filmler Kataloğu (Öncelikli):
@@ -544,13 +1118,26 @@ ${jsonEncode(candidatesList)}
       final title = json['title'].toString();
       final titleNorm = title.toLowerCase().trim();
 
-      // STRICT VALIDATION: If AI hallucinated and picked a movie from the watched list, REJECT IT!
-      final isAlreadyWatched = watchedMovies.any((m) {
-        final mt = m.title.toLowerCase().trim();
-        return mt == titleNorm || (mt.length > 3 && titleNorm.contains(mt)) || (titleNorm.length > 3 && mt.contains(titleNorm));
-      });
-      if (isAlreadyWatched) {
-        return null; // Force fallback to unwatched candidate search
+      // Check if user explicitly asked for rewatch, choice, or selection in a franchise
+      final lowerPrompt = userPrompt.toLowerCase();
+      final isRewatchOrChoice = lowerPrompt.contains('tekrar') ||
+          lowerPrompt.contains('rewatch') ||
+          lowerPrompt.contains('hangisini') ||
+          lowerPrompt.contains('sen seç') ||
+          lowerPrompt.contains('hangisi') ||
+          lowerPrompt.contains('seç') ||
+          lowerPrompt.contains('sec') ||
+          lowerPrompt.contains('which one') ||
+          lowerPrompt.contains('choose');
+
+      if (!isRewatchOrChoice) {
+        final isAlreadyWatched = watchedMovies.any((m) {
+          final mt = m.title.toLowerCase().trim();
+          return mt == titleNorm || (mt.length > 3 && titleNorm.contains(mt)) || (titleNorm.length > 3 && mt.contains(titleNorm));
+        });
+        if (isAlreadyWatched) {
+          return null; // Force fallback to unwatched candidate search
+        }
       }
 
       final selectedId = (json['selected_id'] as num?)?.toInt() ?? 0;

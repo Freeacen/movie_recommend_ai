@@ -1,259 +1,395 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_colors.dart';
 import '../providers/settings_provider.dart';
 import '../screens/shell_screen.dart';
+import 'user_avatar_widget.dart';
 
-class AppNavigationDrawer extends ConsumerWidget {
-  const AppNavigationDrawer({super.key});
+class AppNavigationDrawer extends StatelessWidget {
+  final ValueChanged<int>? onTabSelected;
+  final Animation<double>? itemAnimation;
+
+  const AppNavigationDrawer({
+    super.key,
+    this.onTabSelected,
+    this.itemAnimation,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final drawerWidth = screenWidth > 600
+        ? 265.0
+        : (screenWidth * 0.76).clamp(240.0, 275.0);
+
+    return Drawer(
+      width: drawerWidth,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 0, 16),
+          child: AppNavigationDrawerContent(
+            onTabSelected: onTabSelected,
+            itemAnimation: itemAnimation,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AppNavigationDrawerContent extends ConsumerWidget {
+  final VoidCallback? onClose;
+  final ValueChanged<int>? onTabSelected;
+  final Animation<double>? itemAnimation;
+
+  const AppNavigationDrawerContent({
+    super.key,
+    this.onClose,
+    this.onTabSelected,
+    this.itemAnimation,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final currentIndex = ref.watch(shellNavigationProvider);
     final settings = ref.watch(settingsProvider);
+    final isDark = AppColors.isDark;
 
-    return Drawer(
-      backgroundColor: AppColors.surface,
-      elevation: 16,
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 1. Drawer Header (Branding & Close)
-            Container(
-              padding: const EdgeInsets.fromLTRB(18, 20, 14, 18),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceElevated,
-                border: Border(bottom: BorderSide(color: AppColors.border)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryAmber.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(Icons.movie_filter_rounded, color: AppColors.primaryAmber, size: 26),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'CineAI',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.textHigh,
-                            letterSpacing: -0.5,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Akıllı Film Rehberi & AI',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textMedium,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.close_rounded, color: AppColors.textMedium, size: 22),
-                    tooltip: 'Menüyü Kapat',
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          decoration: BoxDecoration(
+            // High-transparency Apple Frosted Glass (Buzlu Cam)
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [
+                      const Color(0x38FFFFFF), // 22% white specular top highlight
+                      const Color(0x33222C3E), // 20% translucent slate glass body
+                      const Color(0x38121622), // 22% translucent deep smoke
+                    ]
+                  : [
+                      Colors.white.withValues(alpha: 0.65),
+                      Colors.white.withValues(alpha: 0.40),
+                    ],
             ),
-
-            const SizedBox(height: 14),
-
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-              child: Text(
-                'SEKMELER',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textLow,
-                  letterSpacing: 1.2,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.22)
+                  : Colors.white.withValues(alpha: 0.65),
+              width: 1.0,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 20,
+                spreadRadius: -2,
+                offset: const Offset(4, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 1. Header (CineAI + Cyan Circular Close Button)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 14, 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'CineAI',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF2997FF),
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          if (onClose != null) {
+                            onClose!();
+                          } else if (Navigator.of(context).canPop()) {
+                            Navigator.of(context).pop();
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFF2997FF).withValues(alpha: 0.15),
+                            border: Border.all(
+                              color: const Color(0xFF2997FF),
+                              width: 1.2,
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.close_rounded,
+                            color: Color(0xFF2997FF),
+                            size: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
 
-            const SizedBox(height: 6),
+              const SizedBox(height: 6),
 
-            // 2. Navigation Items (Sekmeler)
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  _buildDrawerItem(
-                    context: context,
-                    ref: ref,
-                    index: 0,
-                    currentIndex: currentIndex,
-                    icon: Icons.chat_bubble_rounded,
-                    title: 'AI Sohbet',
-                    subtitle: 'Yapay Zeka Film Danışmanı',
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    ref: ref,
-                    index: 1,
-                    currentIndex: currentIndex,
-                    icon: Icons.explore_rounded,
-                    title: 'Keşfet & Ara',
-                    subtitle: 'Trend & Popüler Film Kataloğu',
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    ref: ref,
-                    index: 2,
-                    currentIndex: currentIndex,
-                    icon: Icons.video_library_rounded,
-                    title: 'Film Kütüphanem',
-                    subtitle: 'İzlenenler & İzleme Listesi',
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    ref: ref,
-                    index: 3,
-                    currentIndex: currentIndex,
-                    icon: Icons.settings_rounded,
-                    title: 'Ayarlar & Eşitleme',
-                    subtitle: 'Bulut Yedekleme & Tercihler',
-                  ),
-                ],
-              ),
-            ),
+              // 2. Navigation Items (Sade, temiz ve kullanıcının istediği sırada)
+              Expanded(
+                child: AnimatedBuilder(
+                  animation: itemAnimation ?? kAlwaysCompleteAnimation,
+                  builder: (context, child) {
+                    final animVal = (itemAnimation ?? kAlwaysCompleteAnimation).value;
+                    const intervals = [
+                      Interval(0.00, 0.60, curve: Curves.easeOutCubic),
+                      Interval(0.10, 0.70, curve: Curves.easeOutCubic),
+                      Interval(0.20, 0.80, curve: Curves.easeOutCubic),
+                      Interval(0.30, 0.90, curve: Curves.easeOutCubic),
+                      Interval(0.40, 1.00, curve: Curves.easeOutCubic),
+                    ];
 
-            // 3. Footer (Fast Theme Toggle & Cloud Badge)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceElevated,
-                border: Border(top: BorderSide(color: AppColors.border)),
-              ),
-              child: Column(
-                children: [
-                  // Fast Theme Toggle Row
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    double getProgress(int idx) {
+                      if (itemAnimation == null || animVal >= 1.0) return 1.0;
+                      return intervals[idx.clamp(0, intervals.length - 1)].transform(animVal);
+                    }
+
+                    return ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
                       children: [
-                        Row(
-                          children: [
-                            Icon(
-                              settings.isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
-                              size: 18,
-                              color: AppColors.primaryAmber,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              settings.isDarkMode ? 'Karanlık Tema' : 'Aydınlık Tema',
-                              style: TextStyle(fontSize: 12, color: AppColors.textHigh, fontWeight: FontWeight.w600),
-                            ),
-                          ],
+                        // Tab 0: AI Sohbet
+                        _buildNavItem(
+                          context: context,
+                          ref: ref,
+                          icon: Icons.chat_bubble_rounded,
+                          title: 'AI Sohbet',
+                          isSelected: currentIndex == 0,
+                          onTap: () => _handleTabTap(context, ref, 0),
+                          progress: getProgress(0),
                         ),
-                        Switch(
-                          value: settings.isDarkMode,
-                          activeThumbColor: AppColors.primaryAmber,
-                          onChanged: (_) => ref.read(settingsProvider.notifier).toggleTheme(),
+                        const SizedBox(height: 4),
+
+                        // Tab 1: Profil (Sürekli 2. sırada)
+                        _buildNavItem(
+                          context: context,
+                          ref: ref,
+                          icon: Icons.person_rounded,
+                          title: 'Profil',
+                          isSelected: currentIndex == 1,
+                          onTap: () => _handleTabTap(context, ref, 1),
+                          progress: getProgress(1),
+                        ),
+                        const SizedBox(height: 4),
+
+                        // Tab 2: Keşfet (Sadece 'Keşfet')
+                        _buildNavItem(
+                          context: context,
+                          ref: ref,
+                          icon: Icons.explore_rounded,
+                          title: 'Keşfet',
+                          isSelected: currentIndex == 2,
+                          onTap: () => _handleTabTap(context, ref, 2),
+                          progress: getProgress(2),
+                        ),
+                        const SizedBox(height: 4),
+
+                        // Tab 3: Kütüphane (Sadece 'Kütüphane')
+                        _buildNavItem(
+                          context: context,
+                          ref: ref,
+                          icon: Icons.video_library_rounded,
+                          title: 'Kütüphane',
+                          isSelected: currentIndex == 3,
+                          onTap: () => _handleTabTap(context, ref, 3),
+                          progress: getProgress(3),
+                        ),
+                        const SizedBox(height: 4),
+
+                        // Tab 4: Ayarlar (Her zaman son sırada)
+                        _buildNavItem(
+                          context: context,
+                          ref: ref,
+                          icon: Icons.settings_rounded,
+                          title: 'Ayarlar',
+                          isSelected: currentIndex == 4,
+                          onTap: () => _handleTabTap(context, ref, 4),
+                          progress: getProgress(4),
                         ),
                       ],
+                    );
+                  },
+                ),
+              ),
+
+              // 3. Footer Divider
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Divider(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.15)
+                      : Colors.black.withValues(alpha: 0.1),
+                  height: 1,
+                  thickness: 0.8,
+                ),
+              ),
+
+              // 4. Footer Section: Sadece Profil Detayı (Ayarlar butonu yukarıda olduğu için kaldırıldı)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => _handleTabTap(context, ref, 1), // Doğrudan Profil sekmesine gider
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                      child: Row(
+                        children: [
+                          UserAvatarWidget(
+                            avatarUrl: settings.avatarUrl,
+                            size: 38,
+                            defaultGradient: const [
+                              Color(0xFF2997FF),
+                              Color(0xFF007AFF),
+                            ],
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  settings.effectiveDisplayName,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark ? Colors.white : AppColors.textHigh,
+                                    letterSpacing: -0.2,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  settings.isLoggedIn
+                                      ? (settings.userEmail ?? 'Bağlı Hesap')
+                                      : 'Film Tutkunu • v2.0',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isDark ? Colors.white.withValues(alpha: 0.6) : AppColors.textMedium,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'CineAI v2.0 • Hibrit Mimari',
-                    style: TextStyle(fontSize: 11, color: AppColors.textLow),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildDrawerItem({
+  void _handleTabTap(BuildContext context, WidgetRef ref, int index) {
+    if (onTabSelected != null) {
+      onTabSelected!(index);
+    } else {
+      ref.read(shellNavigationProvider.notifier).state = index;
+    }
+
+    if (onClose != null) {
+      onClose!();
+    } else if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Widget _buildNavItem({
     required BuildContext context,
     required WidgetRef ref,
-    required int index,
-    required int currentIndex,
     required IconData icon,
     required String title,
-    required String subtitle,
+    required bool isSelected,
+    required VoidCallback onTap,
+    required double progress,
   }) {
-    final isSelected = index == currentIndex;
+    final slideY = (1.0 - progress) * 50.0;
+    final opacity = (progress * progress).clamp(0.0, 1.0);
+    final isDark = AppColors.isDark;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      decoration: BoxDecoration(
-        color: isSelected ? AppColors.primaryAmber.withValues(alpha: 0.14) : Colors.transparent,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isSelected ? AppColors.primaryAmber.withValues(alpha: 0.4) : Colors.transparent,
-        ),
-      ),
-      child: ListTile(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? AppColors.primaryAmber.withValues(alpha: 0.22)
-                : AppColors.surfaceElevated,
-            borderRadius: BorderRadius.circular(10),
+    return Transform.translate(
+      offset: Offset(0, slideY),
+      child: Opacity(
+        opacity: opacity,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(18),
+            child: Container(
+              height: 42,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? const Color(0xFF007AFF) // Solid Apple Blue
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    icon,
+                    size: 19,
+                    color: isSelected
+                        ? Colors.white
+                        : (isDark
+                            ? Colors.white.withValues(alpha: 0.9)
+                            : AppColors.textHigh),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                        color: isSelected
+                            ? Colors.white
+                            : (isDark
+                                ? Colors.white.withValues(alpha: 0.92)
+                                : AppColors.textHigh),
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          child: Icon(
-            icon,
-            color: isSelected ? AppColors.primaryAmber : AppColors.textMedium,
-            size: 20,
-          ),
         ),
-        title: Text(
-          title,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-            color: isSelected ? AppColors.primaryAmber : AppColors.textHigh,
-          ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: TextStyle(
-            fontSize: 11,
-            color: isSelected ? AppColors.textHigh.withValues(alpha: 0.75) : AppColors.textLow,
-          ),
-        ),
-        trailing: isSelected
-            ? Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: AppColors.primaryAmber,
-                  shape: BoxShape.circle,
-                ),
-              )
-            : null,
-        onTap: () {
-          ref.read(shellNavigationProvider.notifier).state = index;
-          Navigator.of(context).pop();
-        },
       ),
     );
   }

@@ -9,14 +9,71 @@ import '../models/movie.dart';
 class MovieRepository {
   final AppDatabase _appDb;
 
-  // In-memory cache pre-seeded with Halil's 20 movies so it NEVER fails on Web or any platform
-  static final List<Movie> _memoryMovies = [
+  static const Map<int, String> defaultPosters = {
+    278: '/7T2SDS5efuJiK45oyKoEzf9RKjw.jpg',
+    1151031: '/1Q3GlCXGYWELifxANYZ5OVMRVZl.jpg',
+    112233: '/1Q3GlCXGYWELifxANYZ5OVMRVZl.jpg',
+    680: '/AgY33Wtg4737MhYopJSFyKWhKsO.jpg',
+    264660: '/dmJW8IAKHKxFNiUnoDR7JfsK7Rp.jpg',
+    105: '/s6pfkJuTFZe7BCfJ5vOCECNmQbW.jpg',
+    165: '/9en7rsecFBOMAZYqwuVeZpTjtpl.jpg',
+    196: '/l28VFt2qCamIKA9HGrKLYHASKtH.jpg',
+    38: '/zZl2T3yj80dwaWBeOWZQoFOJwGe.jpg',
+    157336: '/xbiycuc84TrieEWwkkuH2hoEa9S.jpg',
+    129: '/xvOEOMCzfV8qXkd1n1btZ8q4Psd.jpg',
+    27205: '/xn0Kcg4e6p0mLxVS3nAWhNmW2Ni.jpg',
+    220289: '/ezUtb9m5DeLwL2gxi4gktzNCvQv.jpg',
+    43539: '/9OezQ17R9TdDIJRmymT8nl52jug.jpg',
+    116745: '/5UQEe4wQvvQwGQ8hIQW2JWlHztK.jpg',
+    152601: '/tcSZA1HAsRAbDgndURXl04cgPDe.jpg',
+    17035: '/kj4ZZpyP95ltT4ZF2c6aiyEH5N9.jpg',
+    16428: '/kj4ZZpyP95ltT4ZF2c6aiyEH5N9.jpg',
+    1233413: '/tvRgDns7bJuIWkEaF6JJMKr8kNA.jpg',
+    1234821: '/tvRgDns7bJuIWkEaF6JJMKr8kNA.jpg',
+    227719: '/4WkaeScLqtFPzweYnePa6vgOxlk.jpg',
+    227707: '/4WkaeScLqtFPzweYnePa6vgOxlk.jpg',
+    9654: '/jOGOfdl8DToXFoGrtVe9mdsy0sW.jpg',
+    381289: '/3jcNvhtVQe5Neoffdic39fRactM.jpg',
+  };
+
+  static const Map<int, String> defaultBackdrops = {
+    278: '/pNjh59JSxChQktamG3LMp9ZoQzp.jpg',
+    1151031: '/w6tPctxWAsHoQXeKxxNOT6lYKpx.jpg',
+    112233: '/w6tPctxWAsHoQXeKxxNOT6lYKpx.jpg',
+    680: '/suaEOtk1N1sgg2MTM7oZd2cfVp3.jpg',
+    264660: '/uqOuJ50EtTj7kkDIXP8LCg7G45D.jpg',
+    105: '/5bzPWQ2dFUl2aZKkp7ILJVVkRed.jpg',
+    165: '/w6tPctxWAsHoQXeKxxNOT6lYKpx.jpg',
+    196: '/AtF7TESJEMmImBRUj9Z7HmW2ZH0.jpg',
+    38: '/W1ffLQGHoxfAOq0ZYdPtJlvAdb.jpg',
+    157336: '/8sNiAPPYU14PUepFNeSNGUTiHW.jpg',
+    129: '/6oaL4DP75yABrd5EbC4H2zq5ghc.jpg',
+    27205: '/8ZTVqvKDQ8emSGUEMjsS4yHAwrp.jpg',
+    220289: '/cvGE73s935bXEAVt2W0zADPPegG.jpg',
+    43539: '/kkuykQHWWTcmJ9yerrLF9elCtkc.jpg',
+    116745: '/8hSjOHRY4OUEpqxszYbMdem8z9C.jpg',
+    152601: '/1YnZchmaGc8dchgRPDpR1KGrixA.jpg',
+    17035: '/A7wROeDATxR28m6oyCYMh4IUKV.jpg',
+    16428: '/A7wROeDATxR28m6oyCYMh4IUKV.jpg',
+    1233413: '/nAxGnGHOsfzufThz20zgmRwKur3.jpg',
+    1234821: '/nAxGnGHOsfzufThz20zgmRwKur3.jpg',
+    227719: '/eyJk5LTMLIeAN2kVsP0yXrPZJfl.jpg',
+    227707: '/eyJk5LTMLIeAN2kVsP0yXrPZJfl.jpg',
+    9654: '/jPH8ROhZMLvP0owQCE1J6it7fN0.jpg',
+    381289: '/sLjeApi5odpyEoCzAnbr5DycL3z.jpg',
+  };
+
+  // In-memory cache starting completely empty
+  static final List<Movie> _memoryMovies = [];
+
+  // Demo movies available if manually seeded
+  static const List<Movie> demoMovies = [
     const Movie(
       id: 278,
       title: 'The Shawshank Redemption',
       overview: 'Andy Dufresne, haksız yere çarptırıldığı müebbet hapis cezasında umudunu ve zekasını korur.',
-      posterPath: '/9cqNtx0Gag8bY19rSlGWKbImcq2.jpg',
-      backdropPath: '/kXfqcdQKsToO0OUXHcrrNCHDBzO.jpg',
+      posterPath: '/7T2SDS5efuJiK45oyKoEzf9RKjw.jpg',
+      backdropPath: '/pNjh59JSxChQktamG3LMp9ZoQzp.jpg',
       releaseDate: '1994-09-23',
       voteAverage: 8.7,
       genres: 'Dram, Suç',
@@ -32,7 +89,7 @@ class MovieRepository {
       id: 112233,
       title: 'Bring Her Back',
       overview: 'Kayıp bir yakınının ardından gerilimli bir yüzleşmeye sürüklenen ailenin hikayesi.',
-      posterPath: '/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg',
+      posterPath: '/1Q3GlCXGYWELifxANYZ5OVMRVZl.jpg',
       releaseDate: '2024-05-10',
       voteAverage: 6.0,
       genres: 'Korku, Gerilim',
@@ -47,7 +104,7 @@ class MovieRepository {
       id: 680,
       title: 'Pulp Fiction',
       overview: 'Los Angeles yeraltı dünyasından birbirinden ilginç karakterlerin kesişen maceraları.',
-      posterPath: '/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg',
+      posterPath: '/AgY33Wtg4737MhYopJSFyKWhKsO.jpg',
       backdropPath: '/suaEOtk1N1sgg2MTM7oZd2cfVp3.jpg',
       releaseDate: '1994-09-10',
       voteAverage: 8.5,
@@ -64,8 +121,8 @@ class MovieRepository {
       id: 264660,
       title: 'Ex Machina',
       overview: 'Yapay zekaya sahip Ava ile yapılan Turing testi derin psikolojik gerilime dönüşür.',
-      posterPath: '/dmJW8vlVAFFRHeDAWGsrK9dfWgy.jpg',
-      backdropPath: '/k2z5R5nK8m9N0p1Q2r3S4t5U6v7.jpg',
+      posterPath: '/dmJW8IAKHKxFNiUnoDR7JfsK7Rp.jpg',
+      backdropPath: '/uqOuJ50EtTj7kkDIXP8LCg7G45D.jpg',
       releaseDate: '2014-12-16',
       voteAverage: 7.6,
       genres: 'Dram, Bilim Kurgu',
@@ -80,8 +137,8 @@ class MovieRepository {
       id: 105,
       title: 'Back to the Future',
       overview: 'Marty McFly, çılgın bilim insanı Doc Brown\'ın DeLorean zaman makinesiyle 1955 yılına gider.',
-      posterPath: '/fNOH9f1aA7XRTzl1sAOx9iF553Q.jpg',
-      backdropPath: '/533wjh6T8u7oO6J27v3G91G5jY0.jpg',
+      posterPath: '/s6pfkJuTFZe7BCfJ5vOCECNmQbW.jpg',
+      backdropPath: '/5bzPWQ2dFUl2aZKkp7ILJVVkRed.jpg',
       releaseDate: '1985-07-03',
       voteAverage: 8.3,
       genres: 'Macera, Komedi, Bilim Kurgu',
@@ -97,7 +154,8 @@ class MovieRepository {
       id: 165,
       title: 'Back to the Future Part II',
       overview: 'Marty ve Doc, geleceği kurtarmak için 2015 yılına gidip zaman çizgisini korumaya çalışır.',
-      posterPath: '/77587f7aA7XRTzl1sAOx9iF553Q.jpg',
+      posterPath: '/9en7rsecFBOMAZYqwuVeZpTjtpl.jpg',
+      backdropPath: '/w6tPctxWAsHoQXeKxxNOT6lYKpx.jpg',
       releaseDate: '1989-11-20',
       voteAverage: 7.8,
       genres: 'Macera, Komedi, Bilim Kurgu',
@@ -112,7 +170,8 @@ class MovieRepository {
       id: 196,
       title: 'Back to the Future Part III',
       overview: 'Doc Brown 1885 Vahşi Batı döneminde mahsur kalınca Marty onu kurtarmak için geçmişe gider.',
-      posterPath: '/kv7587f7aA7XRTzl1sAOx9iF553Q.jpg',
+      posterPath: '/l28VFt2qCamIKA9HGrKLYHASKtH.jpg',
+      backdropPath: '/AtF7TESJEMmImBRUj9Z7HmW2ZH0.jpg',
       releaseDate: '1990-05-25',
       voteAverage: 7.5,
       genres: 'Macera, Komedi, Bilim Kurgu, Vahşi Batı',
@@ -127,8 +186,8 @@ class MovieRepository {
       id: 38,
       title: 'Eternal Sunshine of the Spotless Mind',
       overview: 'Birbirlerinin anılarını hafızalarından sildiren iki aşığın zihinsel ve duygusal yolculuğu.',
-      posterPath: '/5MwkWH9tYHv3mV9OdYTMR5qreIz.jpg',
-      backdropPath: '/7c93UnRwN446U17B57bBkl562pL.jpg',
+      posterPath: '/zZl2T3yj80dwaWBeOWZQoFOJwGe.jpg',
+      backdropPath: '/W1ffLQGHoxfAOq0ZYdPtJlvAdb.jpg',
       releaseDate: '2004-03-19',
       voteAverage: 8.1,
       genres: 'Bilim Kurgu, Dram, Romantik',
@@ -144,8 +203,8 @@ class MovieRepository {
       id: 157336,
       title: 'Interstellar',
       overview: 'İnsanlığın geleceğini kurtarmak için solucan deliğinden geçip yeni gezegen arayan kaşifler.',
-      posterPath: '/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg',
-      backdropPath: '/xJHokMbljvjADYdit5fK5VQsXEG.jpg',
+      posterPath: '/xbiycuc84TrieEWwkkuH2hoEa9S.jpg',
+      backdropPath: '/8sNiAPPYU14PUepFNeSNGUTiHW.jpg',
       releaseDate: '2014-11-05',
       voteAverage: 8.4,
       genres: 'Macera, Dram, Bilim Kurgu',
@@ -161,8 +220,8 @@ class MovieRepository {
       id: 129,
       title: 'Spirited Away',
       overview: 'Chihiro, ailesiyle yeni kasabaya taşınırken ruhların ve büyülerin dünyasına adım atar.',
-      posterPath: '/39wmItIWsg5sZMyRUHLkWBcuVCM.jpg',
-      backdropPath: '/mSDsSDwaP3E7dEfUPWy4J0djt4O.jpg',
+      posterPath: '/xvOEOMCzfV8qXkd1n1btZ8q4Psd.jpg',
+      backdropPath: '/6oaL4DP75yABrd5EbC4H2zq5ghc.jpg',
       releaseDate: '2001-07-20',
       voteAverage: 8.5,
       genres: 'Animasyon, Aile, Fantastik',
@@ -177,8 +236,8 @@ class MovieRepository {
       id: 27205,
       title: 'Inception',
       overview: 'Rüyalar içinde zihin hırsızlığı ve fikir ekme operasyonunu konu alan başyapıt.',
-      posterPath: '/edv5CZvWj09upOsy2Y6IwDhK8bt.jpg',
-      backdropPath: '/s3TBrRGB1iav7gFOCNx3H31MoES.jpg',
+      posterPath: '/xn0Kcg4e6p0mLxVS3nAWhNmW2Ni.jpg',
+      backdropPath: '/8ZTVqvKDQ8emSGUEMjsS4yHAwrp.jpg',
       releaseDate: '2010-07-15',
       voteAverage: 8.4,
       genres: 'Bilim Kurgu, Aksiyon, Gerilim',
@@ -194,7 +253,8 @@ class MovieRepository {
       id: 220289,
       title: 'Coherence',
       overview: 'Bir kuyruklu yıldız geçişinde paralel evrenler arasında yaşanan klostrofobik kriz.',
-      posterPath: '/5k33Yn4dCjV3Z35p3e4m8x9p2q0.jpg',
+      posterPath: '/ezUtb9m5DeLwL2gxi4gktzNCvQv.jpg',
+      backdropPath: '/cvGE73s935bXEAVt2W0zADPPegG.jpg',
       releaseDate: '2013-09-19',
       voteAverage: 7.3,
       genres: 'Bilim Kurgu, Gizem, Gerilim',
@@ -210,7 +270,8 @@ class MovieRepository {
       id: 43539,
       title: 'I am Number Four',
       overview: 'Gezegenleri yok edilen ve Dünya\'ya saklanan dokuz uzaylı gençten dördüncüsünün mücadelesi.',
-      posterPath: '/j6sQ55zS9aRk0x8L7e3M9p2q0Z1.jpg',
+      posterPath: '/9OezQ17R9TdDIJRmymT8nl52jug.jpg',
+      backdropPath: '/kkuykQHWWTcmJ9yerrLF9elCtkc.jpg',
       releaseDate: '2011-02-18',
       voteAverage: 6.2,
       genres: 'Aksiyon, Bilim Kurgu, Gerilim',
@@ -225,7 +286,8 @@ class MovieRepository {
       id: 116745,
       title: 'The Secret Life of Walter Mitty',
       overview: 'Sıradan bir dergi editörünün hayallerinin peşinden İzlanda ve Grönland\'a uzanan yolculuğu.',
-      posterPath: '/7mK5S8f4aA7XRTzl1sAOx9iF553.jpg',
+      posterPath: '/5UQEe4wQvvQwGQ8hIQW2JWlHztK.jpg',
+      backdropPath: '/8hSjOHRY4OUEpqxszYbMdem8z9C.jpg',
       releaseDate: '2013-12-25',
       voteAverage: 7.2,
       genres: 'Macera, Komedi, Dram',
@@ -240,7 +302,8 @@ class MovieRepository {
       id: 152601,
       title: 'Her',
       overview: 'Yapay zekalı gelişmiş bir işletim sistemiyle derin bir duygusal bağ kuran yalnız yazar.',
-      posterPath: '/lT5CjE3h9wR8Q5y2X8x8W9x0Y1z.jpg',
+      posterPath: '/tcSZA1HAsRAbDgndURXl04cgPDe.jpg',
+      backdropPath: '/1YnZchmaGc8dchgRPDpR1KGrixA.jpg',
       releaseDate: '2013-12-18',
       voteAverage: 7.9,
       genres: 'Romantik, Bilim Kurgu, Dram',
@@ -252,9 +315,11 @@ class MovieRepository {
       reviewed: true,
     ),
     const Movie(
-      id: 16428,
+      id: 17035,
       title: 'The Amateurs',
       overview: 'Küçük bir kasabada yaşayan bir grup arkadaşın amatör film çekme macerası.',
+      posterPath: '/kj4ZZpyP95ltT4ZF2c6aiyEH5N9.jpg',
+      backdropPath: '/A7wROeDATxR28m6oyCYMh4IUKV.jpg',
       releaseDate: '2005-02-06',
       voteAverage: 6.1,
       genres: 'Komedi',
@@ -266,9 +331,11 @@ class MovieRepository {
       reviewed: true,
     ),
     const Movie(
-      id: 1234821,
+      id: 1233413,
       title: 'Sinners',
       overview: 'Karanlık sırlarla örülü bir kasabada geçen gerilim dolu korku hikayesi.',
+      posterPath: '/tvRgDns7bJuIWkEaF6JJMKr8kNA.jpg',
+      backdropPath: '/nAxGnGHOsfzufThz20zgmRwKur3.jpg',
       releaseDate: '2025-03-07',
       voteAverage: 6.5,
       genres: 'Gerilim, Korku',
@@ -280,9 +347,11 @@ class MovieRepository {
       reviewed: true,
     ),
     const Movie(
-      id: 227707,
+      id: 227719,
       title: 'PROJECT ALMANAC',
       overview: 'Bir grup lise öğrencisi zamanda yolculuk yapmayı keşfeder ancak her müdahale geleceği bozar.',
+      posterPath: '/4WkaeScLqtFPzweYnePa6vgOxlk.jpg',
+      backdropPath: '/eyJk5LTMLIeAN2kVsP0yXrPZJfl.jpg',
       releaseDate: '2015-01-29',
       voteAverage: 6.7,
       genres: 'Bilim Kurgu, Gerilim',
@@ -296,8 +365,10 @@ class MovieRepository {
     ),
     const Movie(
       id: 9654,
-      title: 'Italian Job',
+      title: 'The Italian Job',
       overview: 'Venedik\'te altın külçelerini çalan profesyonel hırsızlar çetesinin Los Angeles\'taki intikamı.',
+      posterPath: '/jOGOfdl8DToXFoGrtVe9mdsy0sW.jpg',
+      backdropPath: '/jPH8ROhZMLvP0owQCE1J6it7fN0.jpg',
       releaseDate: '2003-05-30',
       voteAverage: 6.8,
       genres: 'Aksiyon, Suç',
@@ -312,6 +383,8 @@ class MovieRepository {
       id: 381289,
       title: 'A Dog\'s Purpose',
       overview: 'Farklı hayatlar boyunca reenkarne olarak sahibini arayan sadık bir köpeğin dokunaklı öyküsü.',
+      posterPath: '/3jcNvhtVQe5Neoffdic39fRactM.jpg',
+      backdropPath: '/sLjeApi5odpyEoCzAnbr5DycL3z.jpg',
       releaseDate: '2017-01-19',
       voteAverage: 7.6,
       genres: 'Aile, Komedi, Dram',
@@ -337,7 +410,18 @@ class MovieRepository {
       if (jsonStr != null && jsonStr.isNotEmpty) {
         final list = jsonDecode(jsonStr) as List<dynamic>;
         for (final item in list) {
-          final movie = Movie.fromMap(Map<String, dynamic>.from(item));
+          var movie = Movie.fromMap(Map<String, dynamic>.from(item));
+          // Backfill posters if cached with broken or missing paths
+          if ((movie.posterPath == null || movie.posterPath!.isEmpty || defaultPosters.containsKey(movie.id))) {
+            final fixedPoster = defaultPosters[movie.id];
+            final fixedBackdrop = defaultBackdrops[movie.id];
+            if (fixedPoster != null) {
+              movie = movie.copyWith(
+                posterPath: fixedPoster,
+                backdropPath: fixedBackdrop ?? movie.backdropPath,
+              );
+            }
+          }
           _memoryMovies.removeWhere((m) => m.id == movie.id);
           _memoryMovies.add(movie);
         }
@@ -382,6 +466,46 @@ class MovieRepository {
     } catch (e) {
       debugPrint('saveMovie SQLite error (safe in memory): $e');
     }
+  }
+
+  /// Delete a movie completely from local memory, web storage, and SQLite DB
+  Future<void> deleteMovie(int id) async {
+    _loadFromStorageIfNeeded();
+    _memoryMovies.removeWhere((m) => m.id == id);
+    _saveToStorage();
+
+    try {
+      final db = await _getSafeDb();
+      if (db != null) {
+        await db.delete(
+          'movies',
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+    } catch (e) {
+      debugPrint('deleteMovie SQLite error (safe in memory): $e');
+    }
+  }
+
+  /// Replace all local movies with a provided list (used in cloud restore and merge)
+  Future<void> replaceAllMovies(List<Movie> newMovies) async {
+    _loadFromStorageIfNeeded();
+    _memoryMovies.clear();
+    _memoryMovies.addAll(newMovies);
+    _saveToStorage();
+
+    try {
+      final db = await _getSafeDb();
+      if (db != null) {
+        await db.delete('movies');
+        final batch = db.batch();
+        for (final m in newMovies) {
+          batch.insert('movies', m.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+        await batch.commit(noResult: true);
+      }
+    } catch (_) {}
   }
 
   /// Get single movie by ID
@@ -452,6 +576,14 @@ class MovieRepository {
     } catch (_) {}
 
     return _memoryMovies.where((m) => m.status == MovieStatus.recommended && !m.reviewed).toList();
+  }
+
+  /// Retire a proposed recommendation nudge so the AI stops proactively asking about it
+  Future<void> retireRecommendationNudge(int movieId) async {
+    final existing = await getMovieById(movieId);
+    if (existing != null) {
+      await saveMovie(existing.copyWith(reviewed: true));
+    }
   }
 
   /// Confirm movie watched & STRICTLY keep the original recommendation date as the watched date!
@@ -573,18 +705,20 @@ class MovieRepository {
     return list.take(limit).toList();
   }
 
-  /// Seed Halil's 20 watched movies with their exact dates and ratings
+  /// Seed demo watched movies with their exact dates and ratings
   Future<void> seedDemoData() async {
     try {
       final db = await _getSafeDb();
       if (db != null) {
-        for (final movie in _memoryMovies) {
+        for (final movie in demoMovies) {
           await db.insert('movies', movie.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
         }
       }
     } catch (e) {
       debugPrint('seedDemoData safe memory fallback: $e');
     }
+    _memoryMovies.clear();
+    _memoryMovies.addAll(demoMovies);
     _saveToStorage();
   }
 }

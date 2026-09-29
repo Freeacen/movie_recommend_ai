@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/config/supabase_config.dart';
 import '../../core/utils/date_formatter.dart';
+import '../../core/utils/local_storage.dart';
 import '../../data/models/chat_message.dart';
 import '../../data/models/movie.dart';
 import '../../data/repositories/chat_repository.dart';
@@ -92,6 +93,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final Ref _ref;
   final _uuid = const Uuid();
   final Set<int> _alreadyRecommendedInChat = {};
+  String? _lastRequestedGenre;
 
   ChatNotifier({
     required ChatRepository chatRepo,
@@ -112,8 +114,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     initChat();
   }
 
-  /// Initialize chat and check for unreviewed recommendations
-  Future<void> initChat() async {
+  /// Initialize chat and optionally check for unreviewed recommendations
+  Future<void> initChat({bool isReset = false}) async {
     state = state.copyWith(isGenerating: true);
     try {
       final history = await _chatRepo.getMessages();
@@ -135,8 +137,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
         state = state.copyWith(messages: history, isGenerating: false);
       }
 
-      // Check for proactive recommendation nudge
-      await checkForProactiveReviewNudge();
+      // Check for proactive recommendation nudge ONLY if not a reset
+      if (!isReset) {
+        await checkForProactiveReviewNudge();
+      }
     } catch (e) {
       final welcome = ChatMessage(
         id: _uuid.v4(),
@@ -150,13 +154,69 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   /// Proactive Nudge check: If user hasn't reviewed an earlier recommendation, ask proactively!
+  /// Rules:
+  /// 0. Never ask if there is ALREADY ANY review nudge in the chat! (Prevents stacking/spamming)
+  /// 1. Don't interrupt if chat only has the initial welcome message.
+  /// 2. Never ask if older than 7 days (auto-retire).
+  /// 3. Never ask if proposed less than 24 hours ago (give user time).
+  /// 4. Never ask if already asked 2 times across sessions (max 2 attempts, then retire).
   Future<void> checkForProactiveReviewNudge() async {
     try {
-      final unreviewed = await _movieRepo.getUnreviewedRecommendations();
-      if (unreviewed.isNotEmpty) {
-        final movie = unreviewed.first;
-        final formattedDate = DateFormatter.formatRelative(movie.initialProposedAt);
+      // Rule 0: Never ask if there is ALREADY ANY review nudge in the chat
+      final hasAnyNudgeInChat = state.messages.any(
+        (m) => m.messageType == MessageType.reviewNudge,
+      );
+      if (hasAnyNudgeInChat) return;
 
+      // Rule 1: Don't interrupt immediately upon opening an empty/welcome chat
+      if (state.messages.length <= 1) return;
+
+      final now = DateTime.now();
+
+      // Rule 1b: Never interrupt if the last message was sent by the user or if user chatted recently (< 4 hours)
+      if (state.messages.isNotEmpty) {
+        final lastMsg = state.messages.last;
+        if (lastMsg.sender == MessageSender.user) return;
+        final lastTime = DateTime.tryParse(lastMsg.timestamp);
+        if (lastTime != null && now.difference(lastTime).inHours < 4) {
+          return;
+        }
+      }
+
+      final unreviewed = await _movieRepo.getUnreviewedRecommendations();
+      if (unreviewed.isEmpty) return;
+
+      for (final movie in unreviewed) {
+        // Parse proposed date
+        final proposedDate = DateTime.tryParse(movie.initialProposedAt ?? '');
+        if (proposedDate != null) {
+          final diff = now.difference(proposedDate);
+
+          // Rule 2: If proposed more than 7 days ago, auto-retire and don't ask
+          if (diff.inDays > 7) {
+            await _movieRepo.retireRecommendationNudge(movie.id);
+            continue;
+          }
+
+          // Rule 3: If proposed less than 1 day (24 hours) ago, give user time to watch
+          if (diff.inHours < 24) {
+            continue;
+          }
+        }
+
+        // Rule 4: Max 2 attempts across sessions
+        final nudgeKey = 'cineai_nudge_count_${movie.id}';
+        final countStr = LocalStorageHelper.getItem(nudgeKey);
+        final currentCount = int.tryParse(countStr ?? '0') ?? 0;
+        if (currentCount >= 2) {
+          await _movieRepo.retireRecommendationNudge(movie.id);
+          continue;
+        }
+
+        // Increment nudge count
+        LocalStorageHelper.setItem(nudgeKey, (currentCount + 1).toString());
+
+        final formattedDate = DateFormatter.formatRelative(movie.initialProposedAt);
         final nudgeMessage = ChatMessage(
           id: _uuid.v4(),
           sender: MessageSender.assistant,
@@ -177,6 +237,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
           messages: [...state.messages, nudgeMessage],
           pendingReviewMovie: movie,
         );
+        break; // Only nudge at most one movie at a time
       }
     } catch (_) {}
   }
@@ -204,12 +265,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
 
     try {
-      // 2. Check if we are currently awaiting the user's conversational review answer
-      if (state.isAwaitingInterviewAnswer && state.pendingReviewMovie != null) {
-        await _handleInterviewResponse(trimmed, state.pendingReviewMovie!);
-        return;
-      }
-
       final lower = trimmed.toLowerCase();
 
       // 3. Status or Connection query check (e.g. "geminiye bağlımıyız", "api bağlı mı", "durum ne")
@@ -230,162 +285,350 @@ class ChatNotifier extends StateNotifier<ChatState> {
         return;
       }
 
-      // 6. Check if user reports having watched a movie or mentions a specific film they watched
-      final looksLikeMovieReport = _isWatchedMovieReport(trimmed);
-
-      if (looksLikeMovieReport) {
-        // Did the user directly affirm having watched the recommended/recent film?
-        // (e.g. "izledim", "bunu izledim", "önerdiğin filmi izledim" without specifying another title)
-        final cleanedText = lower.replaceAll(RegExp(r'[.!?,]'), '').trim();
-        final isDirectRecentConfirmation = cleanedText == 'izledim' ||
-            cleanedText == 'bunu izledim' ||
-            cleanedText == 'izledim bunu' ||
-            cleanedText == 'önerdiğin filmi izledim' ||
-            cleanedText == 'onerdiğin filmi izledim' ||
-            cleanedText == 'önerdiğini izledim' ||
-            cleanedText == 'filmi izledim';
-
-        Movie? recentMovie;
-        for (final msg in state.messages.reversed) {
-          if (msg.attachedMovie != null) {
-            recentMovie = msg.attachedMovie;
-            break;
+      // 6. Natural Language Contextual Intent Classification via LLM
+      String? lastAssistantMsg;
+      Movie? lastCardMovie;
+      for (final m in state.messages.reversed) {
+        if (m.sender == MessageSender.assistant) {
+          if (lastAssistantMsg == null && m.content.isNotEmpty) {
+            lastAssistantMsg = m.content;
           }
+          if (lastCardMovie == null && m.attachedMovie != null) {
+            lastCardMovie = m.attachedMovie;
+          }
+          if (lastAssistantMsg != null && lastCardMovie != null) break;
         }
+      }
 
-        if (isDirectRecentConfirmation && recentMovie != null) {
-          final replyMsg = ChatMessage(
-            id: _uuid.v4(),
-            sender: MessageSender.assistant,
-            content: 'Harika! Önerdiğimiz **${recentMovie.title}** filmini izlemişsin. Bu filmi değerlendirip zevk profiline yeni sinematik tercihler eklemek ister misin?',
-            timestamp: DateTime.now().toIso8601String(),
-            attachedMovie: recentMovie,
-            options: [
-              'Sohbetle Değerlendir 🤖',
-              'Hızlı Puan Ver ⭐',
-              'Farklı Bir Film Öner 🍿',
-            ],
-          );
+      // The movie actively on screen in front of user has highest precedence for "bunu / bu filmi",
+      // followed by pendingReviewMovie if no card is on screen.
+      Movie? activeMovie = lastCardMovie ?? state.pendingReviewMovie;
+
+      final classification = await _backendAiService.classifyUserTurnWithContext(
+        userPrompt: trimmed,
+        lastAssistantMessage: lastAssistantMsg,
+        activeMovie: activeMovie,
+      );
+
+      final intent = classification['intent']?.toString() ?? 'GENERAL_CHAT';
+
+      // ----------------------------------------------------------------------
+      // Intent 1: WATCHED_CONFIRMATION or COMPOUND_WATCHED_AND_RECOMMEND
+      // ----------------------------------------------------------------------
+      if (intent == 'WATCHED_CONFIRMATION' || intent == 'COMPOUND_WATCHED_AND_RECOMMEND') {
+        Movie? targetMovie;
+        final identifiedTitle = classification['movie_title']?.toString().trim() ?? '';
+
+        // If user explicitly named a specific title that differs from the active on-screen movie, search TMDB for it
+        if (identifiedTitle.isNotEmpty &&
+            activeMovie != null &&
+            !activeMovie.title.toLowerCase().contains(identifiedTitle.toLowerCase()) &&
+            !identifiedTitle.toLowerCase().contains(activeMovie.title.toLowerCase())) {
           try {
-            await _chatRepo.saveMessage(replyMsg);
+            final searchResults = await _tmdbService.searchMovies(identifiedTitle);
+            if (searchResults.isNotEmpty) {
+              targetMovie = searchResults.first;
+            }
           } catch (_) {}
-
-          state = state.copyWith(
-            messages: [...state.messages, replyMsg],
-            isGenerating: false,
-          );
-          return;
         }
 
-        // Otherwise, ask AI to identify the specific movie mentioned by user
-        final identified = await _backendAiService.identifyAndDiscussWatchedMovie(userPrompt: trimmed);
+        targetMovie ??= activeMovie;
 
-        // Quota / service unavailable — tell the user clearly instead of hallucinating
-        if (identified['quota_exceeded'] == true) {
-          final quotaMsg = ChatMessage(
-            id: _uuid.v4(),
-            sender: MessageSender.assistant,
-            content: '⚠️ Gemini API kota limitine ulaşıldı. Şu an film tanımlama özelliği çalışmıyor.\n\n'
-                'Film adını kendin yazarsan hızlı puan verme ekranından ekleyebilirsin:\n'
-                '📌 **Keşfet** sekmesinden filmi aratıp "İzledim" butonuna basabilirsin.',
-            timestamp: DateTime.now().toIso8601String(),
-            options: ['Farklı Bir Film Öner 🍿', 'Eski Bir Favori Hatırlat 🔁'],
-          );
-          try { await _chatRepo.saveMessage(quotaMsg); } catch (_) {}
-          state = state.copyWith(messages: [...state.messages, quotaMsg], isGenerating: false);
-          return;
+        if (targetMovie == null && identifiedTitle.isNotEmpty) {
+          try {
+            final searchResults = await _tmdbService.searchMovies(identifiedTitle);
+            if (searchResults.isNotEmpty) {
+              targetMovie = searchResults.first;
+            }
+          } catch (_) {}
         }
 
-        if (identified['movie_found'] == true && (identified['title']?.toString().isNotEmpty ?? false)) {
-          final title = identified['title']!.toString();
-          final comment = identified['comment']?.toString() ??
-              '🎬 **$title** filmini izlemişsin! Bu filmi zevk profiline işlemek için değerlendirmek ister misin?';
-          final releaseDate = identified['release_date']?.toString();
-          final genres = identified['genres']?.toString();
-          final overview = identified['overview']?.toString();
-          final voteAvg = (identified['vote_average'] as num?)?.toDouble() ?? 7.0;
-
-          String? posterPath;
-          // If TMDB key is available, check for official poster image
-          if (_tmdbService.apiKey != null && _tmdbService.apiKey!.trim().isNotEmpty) {
-            try {
-              final searchResults = await _tmdbService.searchMovies(title);
-              if (searchResults.isNotEmpty) {
-                posterPath = searchResults.first.posterPath;
-              }
-            } catch (_) {}
+        if (targetMovie != null) {
+          DateTime? explicitWatchDate;
+          if (classification['watch_date'] != null) {
+            explicitWatchDate = DateTime.tryParse(classification['watch_date'].toString());
           }
 
-          final movie = Movie(
-            id: (title.hashCode & 0x7FFFFFFF),
-            title: title,
-            releaseDate: releaseDate,
-            genres: genres,
-            overview: overview,
-            voteAverage: voteAvg,
-            posterPath: posterPath,
-            status: MovieStatus.none,
+          final rating = (classification['rating'] as num?)?.toDouble();
+          final likedAspects = (classification['liked_aspects'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? <String>[];
+          final dislikedAspects = (classification['disliked_aspects'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? <String>[];
+          final hasDetailedReview = classification['has_detailed_review'] == true;
+
+          await _movieRepo.saveMovie(targetMovie);
+          final updatedMovie = await _movieRepo.confirmWatchedAndPreserveDate(
+            movieId: targetMovie.id,
+            rating: rating,
+            ratingSource: rating != null ? 'ai_inferred' : null,
+            likedAspects: likedAspects.isNotEmpty ? likedAspects : null,
+            dislikedAspects: dislikedAspects.isNotEmpty ? dislikedAspects : null,
+            userReview: trimmed,
+            explicitWatchDate: explicitWatchDate,
           );
 
-          final replyMsg = ChatMessage(
-            id: _uuid.v4(),
-            sender: MessageSender.assistant,
-            content: comment,
-            timestamp: DateTime.now().toIso8601String(),
-            attachedMovie: movie,
-            options: [
-              'Sohbetle Değerlendir 🤖',
-              'Hızlı Puan Ver ⭐',
-              'Farklı Bir Film Öner 🍿',
-            ],
-          );
+          if (likedAspects.isNotEmpty || dislikedAspects.isNotEmpty) {
+            await _tasteRepo.appendPreferences(
+              newLiked: likedAspects,
+              newDisliked: dislikedAspects,
+            );
+          }
 
-          try {
+          _ref.read(libraryProvider.notifier).loadLibrary();
+          _ref.read(settingsProvider.notifier).triggerSync();
+          await _movieRepo.retireRecommendationNudge(targetMovie.id);
+
+          String dateInfo = '';
+          if (explicitWatchDate != null) {
+            dateInfo = ' (${DateFormatter.formatFriendly(explicitWatchDate.toIso8601String())} izleme tarihiyle)';
+          }
+
+          // If user also requested a recommendation in the same message (compound intent)
+          if (intent == 'COMPOUND_WATCHED_AND_RECOMMEND') {
+            final notifyMsg = ChatMessage(
+              id: _uuid.v4(),
+              sender: MessageSender.assistant,
+              content: '✨ **${targetMovie.title}** filmini$dateInfo kütüphanene izlendi olarak kaydettim! ${rating != null ? "(Puanın: ⭐ ${rating.toStringAsFixed(1)} / 10.0)" : ""}\n\n'
+                  'Tercihlerini zevk profiline işledim. 🎯 Şimdi istediğin doğrultuda senin için yeni film önerisini hazırlıyorum:',
+              timestamp: DateTime.now().toIso8601String(),
+              attachedMovie: updatedMovie,
+            );
+            try { await _chatRepo.saveMessage(notifyMsg); } catch (_) {}
+            state = state.copyWith(
+              messages: [...state.messages, notifyMsg],
+              pendingReviewMovie: null,
+              isAwaitingInterviewAnswer: false,
+            );
+
+            await _generateRecommendation(trimmed);
+            return;
+          }
+
+          if (hasDetailedReview && rating != null) {
+            final replyMsg = ChatMessage(
+              id: _uuid.v4(),
+              sender: MessageSender.assistant,
+              content: '✨ **${targetMovie.title}** filmini$dateInfo kütüphanene izlendi olarak kaydettim! (Puanın: ⭐ ${rating.toStringAsFixed(1)} / 10.0)\n\n'
+                  '${likedAspects.isNotEmpty ? "• Sevdiğin Özellikler: ${likedAspects.join(', ')}\n" : ""}'
+                  '${dislikedAspects.isNotEmpty ? "• Beğenmediğin Özellikler: ${dislikedAspects.join(', ')}\n" : ""}'
+                  '\nBu sinematik tercihleri zevk profiline işledim. 🎯 Şimdi senin için bu zevkine uygun yeni bir film önerisi hazırlamamı ister misin?',
+              timestamp: DateTime.now().toIso8601String(),
+              attachedMovie: updatedMovie,
+              options: ['Evet, Yeni Bir Film Öner 🍿', 'Farklı Bir Tür Seç 🎬', 'Kütüphaneme Git 📚'],
+            );
             await _chatRepo.saveMessage(replyMsg);
-          } catch (_) {}
+            state = state.copyWith(
+              messages: [...state.messages, replyMsg],
+              isGenerating: false,
+              pendingReviewMovie: null,
+              isAwaitingInterviewAnswer: false,
+            );
+            return;
+          } else {
+            final replyMsg = ChatMessage(
+              id: _uuid.v4(),
+              sender: MessageSender.assistant,
+              content: 'Harika! **${targetMovie.title}** filmini$dateInfo kütüphanene izlendi olarak ekledim. 🎬\n\n'
+                  'Peki filmi nasıl buldun? Kurgusu, atmosferi veya oyunculukları nasıldı? İstersen kısaca değerlendirelim veya puan verelim!',
+              timestamp: DateTime.now().toIso8601String(),
+              attachedMovie: updatedMovie,
+              options: [
+                'Kurgusu ve finali harikaydı ⭐',
+                'Görsellik ve müzikler muhteşemdi 🎶',
+                'Beklentimin altındaydı, temposu yavaştı',
+                'Farklı Bir Film Öner 🍿',
+              ],
+            );
+            await _chatRepo.saveMessage(replyMsg);
+            state = state.copyWith(
+              messages: [...state.messages, replyMsg],
+              isGenerating: false,
+              pendingReviewMovie: updatedMovie,
+              isAwaitingInterviewAnswer: true,
+            );
+            return;
+          }
+        }
+      }
 
-          state = state.copyWith(
-            messages: [...state.messages, replyMsg],
-            isGenerating: false,
-          );
+      // ----------------------------------------------------------------------
+      // Intent 2: START_EVALUATION (User accepts evaluation e.g. "değerlendirelim", "olur")
+      // ----------------------------------------------------------------------
+      if (intent == 'START_EVALUATION') {
+        if (activeMovie != null) {
+          await _promptInterviewQuestions(activeMovie);
           return;
         }
+      }
 
-        // Movie could NOT be identified from text. Never hallucinate or assume they watched recentMovie!
-        final askWhichMsg = ChatMessage(
-          id: _uuid.v4(),
-          sender: MessageSender.assistant,
-          content: 'Tebrikler! Hangi filmi izlediğini tam anlayamadım. Filmin adını yazarsan hemen film hakkında konuşup birlikte değerlendirelim! 🎬',
-          timestamp: DateTime.now().toIso8601String(),
-        );
-        try {
-          await _chatRepo.saveMessage(askWhichMsg);
-        } catch (_) {}
-        state = state.copyWith(
-          messages: [...state.messages, askWhichMsg],
-          isGenerating: false,
-        );
-        return;
-      } else if (lower.contains('henüz değil') || lower.contains('izlemedim')) {
+      // ----------------------------------------------------------------------
+      // Intent 3: POSTPONE_OR_NOT_WATCHED (User postponed or hasn't watched yet)
+      // ----------------------------------------------------------------------
+      if (intent == 'POSTPONE_OR_NOT_WATCHED') {
+        if (state.pendingReviewMovie != null) {
+          await _movieRepo.retireRecommendationNudge(state.pendingReviewMovie!.id);
+        }
         final reply = ChatMessage(
           id: _uuid.v4(),
           sender: MessageSender.assistant,
-          content: 'Sorun değil! İstediğin zaman izleyebilirsin. Peki bugün nasıl bir film izlemek istersin?',
+          content: 'Tamamdır, hiç sorun değil! Aklında bulunsun, istediğin zaman izleyip konuşabiliriz. 🍿\n\n'
+              'Şimdi senin için yeni bir film önerisi hazırlamamı ister misin?',
           timestamp: DateTime.now().toIso8601String(),
-          options: ['Sürpriz Öneri 🎲', 'Bilim Kurgu 🚀', 'Komedi / Rahatlatıcı 🍿'],
+          options: ['Yeni Bir Film Öner 🍿', 'Farklı Bir Tür Seç 🎬', 'Kütüphaneme Git 📚'],
         );
-        try {
-          await _chatRepo.saveMessage(reply);
-        } catch (_) {}
+        await _chatRepo.saveMessage(reply);
         state = state.copyWith(
           messages: [...state.messages, reply],
           isGenerating: false,
           pendingReviewMovie: null,
+          isAwaitingInterviewAnswer: false,
         );
         return;
-      } else if (lower.contains('eski bir favori') || lower.contains('tekrar izle') || lower.contains('hatırlat')) {
+      }
+
+      // ----------------------------------------------------------------------
+      // Intent 4: LIBRARY_QUERY (User asks if movie is in library e.g. "kütüphaneye ekledin mi")
+      // ----------------------------------------------------------------------
+      if (intent == 'LIBRARY_QUERY') {
+        final allMovies = await _movieRepo.getAllMovies();
+        final searchTitle = (classification['movie_title']?.toString() ?? '').isNotEmpty
+            ? classification['movie_title'].toString().trim().toLowerCase()
+            : (activeMovie?.title.toLowerCase() ?? '');
+
+        Movie? foundMovie;
+        for (final m in allMovies) {
+          if (m.title.toLowerCase().contains(searchTitle) || searchTitle.contains(m.title.toLowerCase())) {
+            foundMovie = m;
+            break;
+          }
+        }
+
+        ChatMessage libReply;
+        if (foundMovie != null && foundMovie.status == MovieStatus.watched) {
+          final dateStr = foundMovie.recommendedAt != null
+              ? ' (${DateFormatter.formatFriendly(foundMovie.recommendedAt)})'
+              : '';
+          final scoreStr = foundMovie.userRating != null
+              ? '\n• **Puanın:** ⭐ ${foundMovie.userRating!.toStringAsFixed(1)} / 10.0'
+              : '';
+          libReply = ChatMessage(
+            id: _uuid.v4(),
+            sender: MessageSender.assistant,
+            content: 'Evet! **${foundMovie.title}** filmi kütüphanende **İzlendi** olarak kayıtlı. ✅\n'
+                '• **İzleme Tarihi:** $dateStr$scoreStr\n\n'
+                'Kütüphanem sekmesinden tüm detaylarına ulaşabilir veya yeni bir film keşfedebiliriz!',
+            timestamp: DateTime.now().toIso8601String(),
+            attachedMovie: foundMovie,
+            options: ['Yeni Bir Film Öner 🍿', 'Kütüphaneme Git 📚'],
+          );
+        } else if (foundMovie != null && foundMovie.status == MovieStatus.watchlist) {
+          libReply = ChatMessage(
+            id: _uuid.v4(),
+            sender: MessageSender.assistant,
+            content: '**${foundMovie.title}** şu anda **İzleme Listende** kayıtlı. 📌\n\nFilmi izlediğinde bana söylersen hemen izlendi olarak işaretleyip puanlayabiliriz!',
+            timestamp: DateTime.now().toIso8601String(),
+            attachedMovie: foundMovie,
+            options: ['İzledim Olarak Ekle 🎬', 'Farklı Bir Film Öner 🍿'],
+          );
+        } else {
+          libReply = ChatMessage(
+            id: _uuid.v4(),
+            sender: MessageSender.assistant,
+            content: 'Henüz **${searchTitle.isNotEmpty ? searchTitle : "bu film"}** kütüphanende ekli görünmüyor.\n\nİstersen hemen kütüphanene ekleyebilir veya izleme listene alabilirsin:',
+            timestamp: DateTime.now().toIso8601String(),
+            attachedMovie: activeMovie,
+            options: ['İzledim Olarak Ekle 🎬', 'İzleme Listeme Ekle 📌', 'Yeni Bir Film Öner 🍿'],
+          );
+        }
+
+        await _chatRepo.saveMessage(libReply);
+        state = state.copyWith(messages: [...state.messages, libReply], isGenerating: false);
+        return;
+      }
+
+      // ----------------------------------------------------------------------
+      // Intent: REMOVE_FROM_LIBRARY (User wants to delete/remove movie)
+      // ----------------------------------------------------------------------
+      if (intent == 'REMOVE_FROM_LIBRARY') {
+        Movie? targetMovie;
+        final identifiedTitle = classification['movie_title']?.toString().trim() ?? '';
+        final allMovies = await _movieRepo.getAllMovies();
+
+        if (identifiedTitle.isNotEmpty) {
+          final matches = allMovies.where((m) =>
+              m.title.toLowerCase().contains(identifiedTitle.toLowerCase()) ||
+              identifiedTitle.toLowerCase().contains(m.title.toLowerCase())).toList();
+          if (matches.isNotEmpty) {
+            targetMovie = matches.first;
+          }
+        }
+
+        targetMovie ??= activeMovie;
+
+        if (targetMovie != null) {
+          await _movieRepo.deleteMovie(targetMovie.id);
+          _ref.read(libraryProvider.notifier).loadLibrary();
+          if (state.pendingReviewMovie?.id == targetMovie.id) {
+            state = state.copyWith(pendingReviewMovie: null);
+          }
+
+          final reply = ChatMessage(
+            id: _uuid.v4(),
+            sender: MessageSender.assistant,
+            content: 'Anladım, **${targetMovie.title}** filmini kütüphanenden sildim! 🗑️\n\n'
+                'İstersen yeni bir film önerisi yapabilir veya başka bir şey hakkında konuşabiliriz.',
+            timestamp: DateTime.now().toIso8601String(),
+            options: ['Yeni Bir Film Öner 🍿', 'Kütüphaneme Git 📚', 'Farklı Bir Tür Seç 🎬'],
+          );
+          await _chatRepo.saveMessage(reply);
+          state = state.copyWith(messages: [...state.messages, reply], isGenerating: false);
+          return;
+        } else {
+          final reply = ChatMessage(
+            id: _uuid.v4(),
+            sender: MessageSender.assistant,
+            content: 'Kütüphanenden silmek istediğin filmi bulamadım veya zaten kütüphanende ekli değildi. 🎬\n\n'
+                'Hangi filmi kaldırmak istediğini belirtebilir ya da yeni bir öneri isteyebilirsin.',
+            timestamp: DateTime.now().toIso8601String(),
+            options: ['Yeni Bir Film Öner 🍿', 'Kütüphaneme Git 📚'],
+          );
+          await _chatRepo.saveMessage(reply);
+          state = state.copyWith(messages: [...state.messages, reply], isGenerating: false);
+          return;
+        }
+      }
+
+      final isGenericRewatch = lower == 'eski bir favori' ||
+          lower == 'eski bir favori hatırlat' ||
+          lower == 'eski bir favori öner' ||
+          lower == 'eski favorilerimden öner' ||
+          lower.contains('eski favorilerimden birini');
+      if (isGenericRewatch) {
         await _handleRewatchFallback();
         return;
+      } else if (lower.contains('listeme ekle') || lower.contains('izleme listeme ekle')) {
+        final recentMovie = _getRecentRecommendedMovie();
+        if (recentMovie != null) {
+          await _ref.read(libraryProvider.notifier).toggleWatchlist(recentMovie);
+          _backendAiService.updateRecommendationFeedback(
+            movieId: recentMovie.id,
+            positive: true,
+            signal: 'watchlist_added',
+          );
+          final reply = ChatMessage(
+            id: _uuid.v4(),
+            sender: MessageSender.assistant,
+            content: '📌 **${recentMovie.title}** filmini izleme listene ekledim! Ne zaman istersen Kütüphanem sekmesinden ulaşabilirsin. Şimdi başka bir film keşfetmek ister misin?',
+            timestamp: DateTime.now().toIso8601String(),
+            options: ['Başka Bir Öneri Yap 🔄', 'Farklı Bir Tür Seç 🎬', 'Kütüphaneme Git 📚'],
+          );
+          try { await _chatRepo.saveMessage(reply); } catch (_) {}
+          state = state.copyWith(
+            messages: [...state.messages, reply],
+            isGenerating: false,
+            pendingReviewMovie: null,
+            isAwaitingInterviewAnswer: false,
+          );
+          return;
+        }
       }
 
       // 7. Check if user is asking about currency, newer or older movie in the series ("daha yenisi yok mu", "daha eskisi var mı", "ilk filmi mi")
@@ -394,26 +637,108 @@ class ChatNotifier extends StateNotifier<ChatState> {
         if (handled) return;
       }
 
-      // 8. General conversational chat with Groq or Gemini if active and not a direct recommendation request
-      if (_isGeneralConversational(lower, trimmed)) {
+      // 8. Conversational Review & Interview Handling
+      // If awaiting interview answer and user is providing feedback rather than asking a general question/request
+      if (state.isAwaitingInterviewAnswer && state.pendingReviewMovie != null) {
+        final isQuestionOrOffTopic = trimmed.endsWith('?') ||
+            lower.startsWith('neden') ||
+            lower.startsWith('kim') ||
+            lower.startsWith('nasıl') ||
+            lower.contains('hava') ||
+            lower.contains('yemek') ||
+            lower.contains('tarif');
+
+        if (!isQuestionOrOffTopic) {
+          await _handleInterviewResponse(trimmed, state.pendingReviewMovie!);
+          return;
+        } else {
+          // Reset interview state so user can freely chat without being trapped
+          state = state.copyWith(
+            pendingReviewMovie: null,
+            isAwaitingInterviewAnswer: false,
+          );
+        }
+      }
+
+      // 8. General conversational chat with Groq or Gemini if intent is GENERAL_CHAT or conversational pattern
+      if (intent == 'GENERAL_CHAT' || _isGeneralConversational(lower, trimmed)) {
         final recentMovie = _getRecentRecommendedMovie();
-        String? recentContext;
+        final contextParts = <String>[];
         if (recentMovie != null) {
-          recentContext = 'Kullanıcı şu film kartını inceliyor: ${recentMovie.title} (Çıkış Yılı: ${recentMovie.releaseDate ?? "Bilinmiyor"}), Tür: ${recentMovie.genres ?? ""}.';
+          contextParts.add('Kullanıcının daha önce incelediği / konuşulan film: ${recentMovie.title} (Çıkış Yılı: ${recentMovie.releaseDate ?? "Bilinmiyor"}), Tür: ${recentMovie.genres ?? ""}.');
         }
 
-        String? chatReply = await _backendAiService.generateChatResponse(trimmed, recentContext: recentContext);
-        if (chatReply == null || chatReply.isEmpty) {
-          chatReply = await _geminiService.generateChatResponse(trimmed);
+        // FALSE-POSITIVE PROTECTION: Only perform TMDB search if user is genuinely inquiring about a movie/work
+        if (_isExplicitMovieInquiry(lower, trimmed)) {
+          String? candidateTitle;
+          final match = RegExp(r'([A-Za-z0-9ÇĞİÖŞÜçğıöşü\s\-]+?)\s+(?:filmi|filmini|yapımı|dizisi|serisi)', caseSensitive: false).firstMatch(trimmed);
+          if (match != null) {
+            candidateTitle = match.group(1)?.trim();
+          } else {
+            final classifiedTitle = classification['movie_title']?.toString().trim();
+            if (classifiedTitle != null && classifiedTitle.isNotEmpty && classifiedTitle != activeMovie?.title) {
+              candidateTitle = classifiedTitle;
+            }
+          }
+
+          // Common conversational words that should never trigger an accidental movie search (false-positive protection)
+          const commonIgnoredWords = {
+            'hava', 'yemek', 'tarif', 'tarifi', 'bugün', 'yarın', 'dün', 'neden', 'nasıl',
+            'kim', 'nerede', 'ders', 'okul', 'iş', 'para', 'kitap', 'evet', 'hayır', 'peki',
+            'tamam', 'olur', 'merhaba', 'selam', 'naber', 'nasılsın'
+          };
+
+          if (candidateTitle != null &&
+              candidateTitle.length > 2 &&
+              !commonIgnoredWords.contains(candidateTitle.toLowerCase())) {
+            try {
+              final tmdbMatches = await _tmdbService.searchMovies(candidateTitle);
+              if (tmdbMatches.isNotEmpty) {
+                final cLower = candidateTitle.toLowerCase();
+                final hit = tmdbMatches.firstWhere(
+                  (m) => m.title.toLowerCase().contains(cLower) ||
+                      cLower.contains(m.title.toLowerCase()) ||
+                      (m.originalTitle != null && m.originalTitle!.toLowerCase().contains(cLower)),
+                  orElse: () => tmdbMatches.first,
+                );
+
+                // Quality gate: ensure the match has valid movie info
+                final hasInfo = (hit.overview != null && hit.overview!.isNotEmpty) ||
+                    (hit.genres != null && hit.genres!.isNotEmpty) ||
+                    (hit.releaseDate != null && hit.releaseDate!.isNotEmpty) ||
+                    hit.posterUrl.isNotEmpty;
+
+                if (hasInfo) {
+                  contextParts.add('Kullanıcının bahsettiği / sorduğu olası film için TMDB Doğrulanmış Gerçek Bilgiler (Not: Yalnızca kullanıcının mesajı gerçekten bu yapımla ilgiliyse kullan):\n'
+                      '• Film Adı: ${hit.title} (Orijinal: ${hit.originalTitle ?? ""})\n'
+                      '• Vizyon Tarihi: ${hit.releaseDate ?? "Bilinmiyor / Yakında"}\n'
+                      '• Türler: ${hit.genres ?? "Sinema"}\n'
+                      '• Konusu / Özeti: ${(hit.overview != null && hit.overview!.isNotEmpty) ? hit.overview : "Detaylar ve yapım aşaması sürmektedir."}');
+                }
+              }
+            } catch (_) {}
+          }
         }
+
+        final recentContext = contextParts.isNotEmpty ? contextParts.join('\n\n') : null;
+        String? chatReply = await _backendAiService.generateChatResponse(trimmed, recentContext: recentContext);
 
         if (chatReply != null && chatReply.isNotEmpty) {
+          final optionsList = <String>[];
+          if (_lastRequestedGenre != null && _lastRequestedGenre!.isNotEmpty) {
+            optionsList.add('Bana ${_lastRequestedGenre!} Öner 🚀');
+            optionsList.add('Farklı Bir Tür Seç 🎬');
+            optionsList.add('Eski Bir Favori Hatırlat 🔁');
+          } else {
+            optionsList.addAll(['Bana Bir Film Öner 🎬', 'Akıl Yakan Bilim Kurgu 🚀', 'Farklı Bir Tür Seç 🍿']);
+          }
+
           final replyMsg = ChatMessage(
             id: _uuid.v4(),
             sender: MessageSender.assistant,
             content: chatReply,
             timestamp: DateTime.now().toIso8601String(),
-            options: ['Bana Bir Film Öner 🎬', 'Süper Kahraman Filmi Öner 🦸‍♂️', 'Akıl Yakan Gerilim 🧠'],
+            options: optionsList,
           );
           try {
             await _chatRepo.saveMessage(replyMsg);
@@ -426,8 +751,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
       }
 
-      // 8. Regular Recommendation Request
-      await _generateRecommendation(trimmed);
+      // 9. Recommendation Request (regular, franchise selection or rewatch choice)
+      state = state.copyWith(
+        pendingReviewMovie: null,
+        isAwaitingInterviewAnswer: false,
+      );
+      final isRewatchOrChoice = classification['is_rewatch_or_choice'] == true ||
+          ((lower.contains('hangisi') || lower.contains('seç') || lower.contains('sec') || lower.contains('which') || lower.contains('choose')) &&
+              (lower.contains('izle') || lower.contains('seyret') || lower.contains('tekrar')));
+      final targetTitle = classification['movie_title']?.toString();
+
+      await _generateRecommendation(
+        trimmed,
+        isRewatchOrChoice: isRewatchOrChoice,
+        candidateQuery: targetTitle,
+      );
     } catch (e, stack) {
       debugPrint('ChatProvider caught error: $e');
       debugPrint(stack.toString());
@@ -553,11 +891,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(
       messages: [...state.messages, reply],
       isGenerating: false,
+      pendingReviewMovie: null,
+      isAwaitingInterviewAnswer: false,
     );
   }
 
   bool _isGeneralConversational(String lower, String raw) {
-    // 1. Objections, criticisms, or complaints about previous recommendations (e.g. "tenetle örümcek adam ne alaka ya")
+    // 1. Objections, criticisms, or complaints about previous recommendations (e.g. "tenetle örümcek adam ne alaka ya", "bilim kurgu demiştim bunda var mı")
     if (lower.contains('ne alaka') ||
         lower.contains('alakası ne') ||
         lower.contains('alakasız') ||
@@ -567,7 +907,23 @@ class ChatNotifier extends StateNotifier<ChatState> {
         lower.contains('bu ne alaka') ||
         lower.contains('saçma') ||
         lower.contains('alaka ya') ||
-        lower.contains('alakası yok')) {
+        lower.contains('alakası yok') ||
+        lower.contains('demiştim') ||
+        lower.contains('bunda var mı') ||
+        lower.contains('bunda o var mı') ||
+        lower.contains('bunda yok') ||
+        lower.contains('bunda o yok') ||
+        lower.contains('bu o değil') ||
+        lower.contains('uyuşmuyor') ||
+        lower.contains('değil ki')) {
+      final recent = _getRecentRecommendedMovie();
+      if (recent != null) {
+        _backendAiService.updateRecommendationFeedback(
+          movieId: recent.id,
+          positive: false,
+          signal: 'user_complaint',
+        );
+      }
       return true;
     }
 
@@ -583,6 +939,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
         lower.contains('devam filmi var mı') ||
         lower.contains('öncesi var mı')) {
       return true;
+    }
+
+    // If user explicitly asks NOT to recommend (e.g. "film önerme", "tavsiye istemiyorum", "öneri yapma", "don't recommend")
+    if (lower.contains('önerme') ||
+        lower.contains('onerme') ||
+        lower.contains('tavsiye etme') ||
+        lower.contains('tavsiye verme') ||
+        lower.contains('öneri yapma') ||
+        lower.contains('oneri yapma') ||
+        lower.contains('don\'t recommend') ||
+        lower.contains('no recommendation') ||
+        (lower.contains('istemiyorum') && (lower.contains('öner') || lower.contains('tavsiye') || lower.contains('film'))) ||
+        (lower.contains('istemem') && (lower.contains('öner') || lower.contains('tavsiye') || lower.contains('film')))) {
+      return true; // Explicitly conversational! User does NOT want recommendation
     }
 
     if (lower.contains('film öner') ||
@@ -615,6 +985,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
         lower.contains('mıyım') ||
         lower.contains('miyiz') ||
         lower.contains('mıyız') ||
+        lower.contains('duydun mu') ||
+        lower.contains('duydunmu') ||
+        lower.contains('biliyor musun') ||
+        lower.contains('biliyor mu') ||
+        lower.contains('gördün mü') ||
+        lower.contains('izledin mi') ||
+        lower.contains('benzer mi') ||
+        lower.contains('aynı mı') ||
+        lower.contains('farkı ne') ||
+        lower.contains('farkı nedir') ||
+        lower.contains('nasıl bir film') ||
+        lower.contains('konusu ne') ||
+        lower.contains('konusu nedir') ||
         lower.contains('film dışında') ||
         lower.contains('cevaplar mısın') ||
         lower.contains('sohbet') ||
@@ -626,6 +1009,48 @@ class ChatNotifier extends StateNotifier<ChatState> {
         lower.startsWith('anlat') ||
         lower.contains('hakkında ne düşünüyorsun') ||
         lower.contains('en sevdiğin');
+  }
+
+  bool _isExplicitMovieInquiry(String lower, String raw) {
+    // Explicit cinema or work indicators
+    if (lower.contains('filmi') ||
+        lower.contains('filmini') ||
+        lower.contains('filmine') ||
+        lower.contains('filmlerini') ||
+        lower.contains('yapımı') ||
+        lower.contains('yapımını') ||
+        lower.contains('dizisi') ||
+        lower.contains('dizisini') ||
+        lower.contains('serisi') ||
+        lower.contains('serisini') ||
+        lower.contains('movie') ||
+        lower.contains('film')) {
+      return true;
+    }
+
+    // Direct inquiry questions about a title or cinema works
+    return lower.contains('duydun mu') ||
+        lower.contains('duydunmu') ||
+        lower.contains('biliyor musun') ||
+        lower.contains('biliyor mu') ||
+        lower.contains('gördün mü') ||
+        lower.contains('izledin mi') ||
+        lower.contains('benzer mi') ||
+        lower.contains('nasıl bir film') ||
+        lower.contains('sence nasıl') ||
+        lower.contains('sence iyi mi') ||
+        lower.contains('sence deger mi') ||
+        lower.contains('sence değer mi') ||
+        lower.contains('izlemeye değer mi') ||
+        lower.contains('hakkında ne düşünüyorsun') ||
+        lower.contains('konusu ne') ||
+        lower.contains('konusu nedir') ||
+        lower.contains('vizyonda mı') ||
+        lower.contains('vizyona girdi mi') ||
+        lower.contains('vizyona girecek mi') ||
+        lower.contains('çıktı mı') ||
+        lower.contains('başrolü kim') ||
+        lower.contains('yönetmeni kim');
   }
 
   bool _isWatchedMovieReport(String text) {
@@ -690,7 +1115,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         .replaceAll(RegExp(r'\b(filmlerinden|filmleri|filmini|filmine|filmi|filmler|film)\b'), ' ')
         .replaceAll(RegExp(r'\b(izlesem|izlesek|izleyeyim|izleyelim|izlemek|zilesem|izle|seyret)\b'), ' ')
         .replaceAll(RegExp(r'\b(mi|mu|mü|mı|misin|mısın|musun|müsün)\b'), ' ')
-        .replaceAll(RegExp(r'\b(en son|son|neler var|ne var|neler|hangisi|hangisini|öneri|önerir|öner|tavsiye|bana|bir|bişey|şey|türünde|hakkında|tarzı|gibi)\b'), ' ')
+        .replaceAll(RegExp(r'\b(en son|son|neler var|ne var|neler|hangisi|hangisini|öneri|önerir|öner|tavsiye|bana|bir|bişey|şey|türünde|hakkında|tarzı|gibi|istiyorum|istiyom|istiyoruz|bakarım|baksam|bakalım|gelsin|ver|bul|arıyorum|ariyorum|lazım|lazim|var mı|var mi|canım)\b'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     return s;
@@ -771,7 +1196,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final recentMovie = _getRecentRecommendedMovie();
 
     // 1. TIER 3: Clean Slate / Genre Reset (Evrenden Kesin Çıkış)
-    // User wants a completely different genre, mood, or explicitly wants to leave the franchise.
+    // User wants a completely different genre, mood, fresh recommendation or explicitly wants to leave the franchise.
     final isCleanSlateExit = lower.contains('başka tarz') ||
         lower.contains('farklı tarz') ||
         lower.contains('başka bir tarz') ||
@@ -795,6 +1220,29 @@ class ChatNotifier extends StateNotifier<ChatState> {
         lower.contains('bambaşka bir') ||
         lower.contains('bambaşka bi') ||
         lower.contains('tamamen farklı') ||
+        lower.contains('başka bir şey') ||
+        lower.contains('başka bir sey') ||
+        lower.contains('başka bişey') ||
+        lower.contains('başka bisey') ||
+        lower.contains('başka bir film') ||
+        lower.contains('başka film') ||
+        lower.contains('başka bir yapım') ||
+        lower.contains('başka yapım') ||
+        lower.contains('başka öneri') ||
+        lower.contains('başka bir öneri') ||
+        lower.contains('başka tavsiye') ||
+        lower.contains('farklı bir film') ||
+        lower.contains('farklı film') ||
+        lower.contains('farklı bir şey') ||
+        lower.contains('farklı bir sey') ||
+        lower.contains('farklı bişey') ||
+        lower.contains('farklı bisey') ||
+        lower.contains('farklı bir yapım') ||
+        lower.contains('farklı yapım') ||
+        lower.contains('farklı bir öneri') ||
+        lower.contains('farklı öneri') ||
+        lower.contains('seriden çık') ||
+        lower.contains('evrenden çık') ||
         lower.contains('süper kahraman olmasın') ||
         lower.contains('süper kahraman istemiyorum') ||
         lower.contains('kahraman filmi olmasın') ||
@@ -859,23 +1307,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
         lower.contains('romantik olmasın') ||
         lower.contains('aşk filmi olmasın');
 
-    final isContinuityOrReplacement = lower.contains('başka bi') ||
-        lower.contains('başka bir') ||
-        lower.contains('başka film') ||
-        lower.contains('diğer film') ||
-        lower.contains('diğer filmleri') ||
-        lower.contains('daha yeni') ||
-        lower.contains('daha yenisi') ||
-        lower.contains('daha eski') ||
+    final isContinuityOrReplacement = lower.contains('aynı seriden') ||
+        lower.contains('bu seriden') ||
         lower.contains('aynı seri') ||
         lower.contains('bu seri') ||
-        lower.contains('ondan başka') ||
-        lower.contains('onun yerine') ||
-        lower.contains('bunun yerine') ||
-        lower.contains('sarmadı') ||
-        lower.contains('beğenmedim') ||
-        lower.contains('sevmedim') ||
-        lower.contains('bunu değil');
+        lower.contains('serinin devamı') ||
+        lower.contains('serinin diğer') ||
+        lower.contains('bu evrenden') ||
+        lower.contains('ondan önceki') ||
+        lower.contains('ondan sonraki') ||
+        lower.contains('daha yeni') ||
+        lower.contains('daha yenisi') ||
+        lower.contains('daha eski');
 
     final excludeGenres = <String>[];
     if (isAnimationRejection) {
@@ -896,14 +1339,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (isCleanSlateExit) {
       tier = ContextualIntentTier.cleanSlateExit;
       inheritedFranchise = null; // Clean slate: completely clear previous franchise!
-      for (final g in ['komedi', 'korku', 'gerilim', 'aksiyon', 'dram', 'romantik', 'bilim kurgu', 'fantastik', 'macera', 'suç']) {
+      bool matchedGenre = false;
+      for (final g in ['komedi', 'korku', 'gerilim', 'aksiyon', 'dram', 'romantik', 'bilim kurgu', 'bilimkurgu', 'fantastik', 'macera', 'suç', 'animasyon', 'gizem', 'western', 'belgesel', 'anime']) {
         if (lower.contains(g)) {
-          effectiveQuery = g;
+          effectiveQuery = g == 'bilimkurgu' ? 'bilim kurgu' : g;
+          _lastRequestedGenre = effectiveQuery;
+          matchedGenre = true;
           break;
         }
       }
-      if (effectiveQuery.contains('tarz') || effectiveQuery.contains('tür') || effectiveQuery.contains('boşver')) {
-        effectiveQuery = '';
+      if (!matchedGenre) {
+        if (_lastRequestedGenre != null && _lastRequestedGenre!.isNotEmpty) {
+          effectiveQuery = _lastRequestedGenre!;
+        } else if (effectiveQuery.contains('tarz') || effectiveQuery.contains('tür') || effectiveQuery.contains('boşver') || effectiveQuery.contains('başka')) {
+          effectiveQuery = '';
+        }
       }
     } else if (isThematicBridge && recentMovie != null) {
       tier = ContextualIntentTier.thematicBridge;
@@ -922,8 +1372,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final hasContextualContinuation = isAnimationRejection ||
           isHorrorRejection ||
           isOtherNegative ||
-          isContinuityOrReplacement ||
-          rawQuery.isEmpty;
+          isContinuityOrReplacement;
 
       if (hasContextualContinuation && recentMovie != null) {
         inheritedFranchise = _extractFranchiseOrCoreTopic(recentMovie);
@@ -931,7 +1380,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
             rawQuery.contains('animasyon') ||
             rawQuery.contains('çizgi') ||
             rawQuery.contains('aksiyon') ||
-            rawQuery.contains('başka') ||
             rawQuery.contains('korku') ||
             rawQuery.length < 4 ||
             isAnimationRejection ||
@@ -1483,6 +1931,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _ref.read(libraryProvider.notifier).loadLibrary();
     _ref.read(settingsProvider.notifier).triggerSync();
 
+    // Feedback loop to cloud recommendation cache
+    if (analysis.score >= 7.0) {
+      _backendAiService.updateRecommendationFeedback(
+        movieId: movie.id,
+        positive: true,
+        signal: 'high_score_${analysis.score}',
+      );
+    } else if (analysis.score < 5.0) {
+      _backendAiService.updateRecommendationFeedback(
+        movieId: movie.id,
+        positive: false,
+        signal: 'low_score_${analysis.score}',
+      );
+    }
+
     final responseMsg = ChatMessage(
       id: _uuid.v4(),
       sender: MessageSender.assistant,
@@ -1508,7 +1971,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   /// Generate personalized recommendation using UserTasteProfile
-  Future<void> _generateRecommendation(String prompt) async {
+  Future<void> _generateRecommendation(
+    String prompt, {
+    bool isRewatchOrChoice = false,
+    String? candidateQuery,
+  }) async {
     final tasteProfile = await _tasteRepo.getUserTasteProfile();
     final watchedMovies = await _movieRepo.getWatchedMovies();
     final watchlistMovies = await _movieRepo.getWatchlist();
@@ -1516,20 +1983,51 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final trendingCatalog = await _tmdbService.getTrendingMovies();
 
     final excludedIds = allLibraryMovies.map((m) => m.id).toSet()..addAll(_alreadyRecommendedInChat);
-    final excludedTitles = allLibraryMovies.map((m) => m.title.toLowerCase().trim()).toSet();
+    final excludedTitles = <String>{};
+    for (final m in allLibraryMovies) {
+      if (m.title.isNotEmpty) excludedTitles.add(m.title.toLowerCase().trim());
+      if (m.originalTitle != null && m.originalTitle!.isNotEmpty) {
+        excludedTitles.add(m.originalTitle!.toLowerCase().trim());
+      }
+    }
+
+    final pLower = prompt.toLowerCase();
+    for (final g in ['bilim kurgu', 'bilimkurgu', 'korku', 'gerilim', 'komedi', 'aksiyon', 'dram', 'romantik', 'fantastik', 'macera', 'suç', 'animasyon', 'gizem', 'belgesel', 'western', 'anime']) {
+      if (pLower.contains(g)) {
+        _lastRequestedGenre = g == 'bilimkurgu' ? 'bilim kurgu' : g;
+        break;
+      }
+    }
 
     // Resolve multi-turn context and negative filters
     final contextInfo = _resolveContextualSearch(prompt);
-    final cleanSearchQuery = contextInfo.searchQuery;
+    final rawExtracted = _extractSearchQuery(prompt);
+
+    // Identify target franchise or series topic if applicable
+    final targetFranchise = (candidateQuery != null && candidateQuery.trim().isNotEmpty)
+        ? candidateQuery.trim()
+        : (contextInfo.inheritedFranchise ?? (rawExtracted.isNotEmpty ? rawExtracted : null));
 
     bool isExcluded(Movie m, [String? explicitTitle]) {
-      if (excludedIds.contains(m.id)) return true;
       final t = (explicitTitle ?? m.title).toLowerCase().trim();
-      if (t.isEmpty) return false;
-      if (excludedTitles.contains(t)) return true;
+      final orig = (m.originalTitle ?? '').toLowerCase().trim();
+
+      // If user explicitly asks for a rewatch or choice within a franchise, do NOT exclude matching franchise movies!
+      if (isRewatchOrChoice && targetFranchise != null && (_isTitleSameFranchise(t, targetFranchise) || (orig.isNotEmpty && _isTitleSameFranchise(orig, targetFranchise)))) {
+        return false;
+      }
+
+      if (m.id != 0 && excludedIds.contains(m.id)) return true;
+      if (t.isNotEmpty && excludedTitles.contains(t)) return true;
+      if (orig.isNotEmpty && excludedTitles.contains(orig)) return true;
       for (final et in excludedTitles) {
-        if (et.isNotEmpty && (et == t || (et.length > 3 && t.contains(et)) || (t.length > 3 && et.contains(t)))) {
-          return true;
+        if (et.isNotEmpty) {
+          if (t == et || (et.length > 3 && t.contains(et)) || (t.length > 3 && et.contains(t))) {
+            return true;
+          }
+          if (orig.isNotEmpty && (orig == et || (et.length > 3 && orig.contains(et)) || (orig.length > 3 && et.contains(orig)))) {
+            return true;
+          }
         }
       }
       // Check negative genre filters (e.g. "animasyon sevmiyorum")
@@ -1547,17 +2045,31 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return false;
     }
 
-    // 1. If user prompt contains specific search terms/franchises, search TMDB to get relevant candidates first!
-    List<Movie> relevantPromptMovies = [];
-    if (cleanSearchQuery.isNotEmpty) {
-      try {
-        final searchResults = await _tmdbService.searchMovies(cleanSearchQuery);
-        relevantPromptMovies = searchResults.where((m) => !isExcluded(m)).toList();
-      } catch (_) {}
+    // Candidate catalog: Enrich with TMDB search for target franchise/topic if present
+    List<Movie> candidatePool = List.from(trendingCatalog);
+    final searchTerms = <String>[];
+    if (candidateQuery != null && candidateQuery.trim().isNotEmpty) {
+      searchTerms.add(candidateQuery.trim());
+    }
+    if (contextInfo.inheritedFranchise != null && contextInfo.inheritedFranchise!.isNotEmpty) {
+      searchTerms.add(contextInfo.inheritedFranchise!);
+    }
+    if (contextInfo.searchQuery.isNotEmpty) {
+      searchTerms.add(contextInfo.searchQuery);
+    }
+    if (rawExtracted.isNotEmpty && rawExtracted.length > 2 && !searchTerms.contains(rawExtracted)) {
+      searchTerms.add(rawExtracted);
     }
 
-    // Candidate catalog: Relevant prompt movies first, followed by trending catalog
-    final candidatePool = [...relevantPromptMovies, ...trendingCatalog];
+    for (final term in searchTerms) {
+      try {
+        final results = await _tmdbService.searchMovies(term);
+        if (results.isNotEmpty) {
+          candidatePool = [...results, ...candidatePool];
+          break;
+        }
+      } catch (_) {}
+    }
 
     String aiUserPrompt = prompt;
     if (contextInfo.tier == ContextualIntentTier.cleanSlateExit) {
@@ -1587,17 +2099,23 @@ class ChatNotifier extends StateNotifier<ChatState> {
           'MUTLAKA "$franchise" evreninden, kullanıcının bu kısıtlamasına uyan canlı aksiyon bir film öner. (Aday kataloğunda bu evrenden canlı aksiyon filmler bulunmaktadır, öncelikle katalogdan seç).';
     }
 
+    final recentMovie = contextInfo.recentMovie ?? _getRecentRecommendedMovie();
+    final recentContextStr = recentMovie != null
+        ? 'Son önerilen film: ${recentMovie.title} (${recentMovie.releaseDate ?? ""})'
+        : null;
+
     final result = await _backendAiService.getRecommendation(
       userPrompt: aiUserPrompt,
       tasteProfile: tasteProfile,
       watchedMovies: allLibraryMovies,
       candidateCatalog: candidatePool,
       excludedMovieIds: excludedIds,
+      recentContext: recentContextStr,
     );
 
     // Quota exhausted — show clear message, fall back to local catalog recommendation
     if (result['quota_exceeded'] == true) {
-      final catalog2 = relevantPromptMovies.isNotEmpty ? relevantPromptMovies : TmdbService.getMockMovies();
+      final catalog2 = candidatePool.isNotEmpty ? candidatePool : TmdbService.getMockMovies();
       final unwatched = catalog2.where((m) => !isExcluded(m)).toList();
       final pick = unwatched.isNotEmpty ? unwatched.first : null;
 
@@ -1630,7 +2148,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return;
     }
 
-    final activeFranchise = contextInfo.inheritedFranchise ?? (cleanSearchQuery.isNotEmpty ? cleanSearchQuery : null);
+    final activeFranchise = contextInfo.tier == ContextualIntentTier.cleanSlateExit
+        ? null
+        : contextInfo.inheritedFranchise;
 
     // Find or fetch movie object from strictly unwatched & non-repeated candidates
     final title = result['recommended_title']?.toString() ?? '';
@@ -1638,17 +2158,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     var availableCatalog = candidatePool.where((m) => !isExcluded(m)).toList();
 
-    // Verify if AI's recommended title actually belongs to the active franchise
+    // Verify if AI's recommended title actually belongs to the active franchise (if any)
     final isAiTitleInFranchise = activeFranchise == null || _isTitleSameFranchise(title, activeFranchise);
 
     Movie? matchedMovie;
-    // 1. If AI recommended a title and it matches active franchise, ensure it is NOT an excluded/watched movie
-    if (isAiTitleInFranchise && title.isNotEmpty && !isExcluded(const Movie(id: 0, title: ''), title)) {
+    // 1. If AI recommended a title and it matches active franchise, ensure it is NOT an excluded/watched movie (unless rewatch/choice requested)
+    if (isAiTitleInFranchise && title.isNotEmpty && (isRewatchOrChoice || !isExcluded(const Movie(id: 0, title: ''), title))) {
       // 1a. Try matching in candidate catalog
-      for (final m in availableCatalog) {
+      for (final m in availableCatalog.isNotEmpty ? availableCatalog : candidatePool) {
         if (m.title.toLowerCase().trim() == title.toLowerCase().trim() ||
             m.title.toLowerCase().contains(title.toLowerCase()) ||
-            title.toLowerCase().contains(m.title.toLowerCase())) {
+            title.toLowerCase().contains(m.title.toLowerCase()) ||
+            (m.originalTitle != null && m.originalTitle!.isNotEmpty &&
+             (m.originalTitle!.toLowerCase().trim() == title.toLowerCase().trim() ||
+              m.originalTitle!.toLowerCase().contains(title.toLowerCase()) ||
+              title.toLowerCase().contains(m.originalTitle!.toLowerCase())))) {
           matchedMovie = m;
           break;
         }
@@ -1658,55 +2182,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (matchedMovie == null) {
         try {
           final searchResults = await _tmdbService.searchMovies(title);
-          final unwatchedSearch = searchResults.where((m) => !isExcluded(m)).toList();
-          if (unwatchedSearch.isNotEmpty) {
-            final cand = unwatchedSearch.first;
-            if (activeFranchise == null || _isSameFranchise(cand, activeFranchise)) {
-              matchedMovie = cand;
+          for (final cand in searchResults) {
+            if (isRewatchOrChoice || !isExcluded(cand, title)) {
+              if (activeFranchise == null || _isSameFranchise(cand, activeFranchise)) {
+                matchedMovie = cand;
+                break;
+              }
             }
           }
         } catch (_) {}
       }
     }
 
-    // 2. If title was invalid, off-franchise (hallucinated/drifted), already watched, or empty:
-    // ALWAYS fallback to relevantPromptMovies first!
-    if (matchedMovie == null) {
-      if (relevantPromptMovies.isNotEmpty) {
-        matchedMovie = relevantPromptMovies.first;
-      } else {
-        try {
-          final promptSearch = await _tmdbService.searchMovies(cleanSearchQuery.isNotEmpty ? cleanSearchQuery : prompt);
-          final unwatchedFromPrompt = promptSearch.where((m) => !isExcluded(m)).toList();
-          if (unwatchedFromPrompt.isNotEmpty) {
-            matchedMovie = unwatchedFromPrompt.first;
-          }
-        } catch (_) {}
-      }
-    }
-
-    // 3. Fallback to candidate catalog ONLY if user did not ask for a specific search keyword
-    if (matchedMovie == null && cleanSearchQuery.isEmpty && availableCatalog.isNotEmpty) {
+    // 2. If AI title could not be matched, fallback to available catalog ONLY if no franchise restriction
+    if (matchedMovie == null && activeFranchise == null && availableCatalog.isNotEmpty) {
       matchedMovie = availableCatalog.first;
-    }
-
-    // Contextual reason enhancement based on intent tier:
-    if (contextInfo.tier == ContextualIntentTier.cleanSlateExit) {
-      if (!reason.toLowerCase().contains('geride') && !reason.toLowerCase().contains('farklı')) {
-        reason = 'Önceki seriyi tamamen arkamızda bırakıyoruz! Madem başka tarz bir yapım istiyorsun, senin için seçtiğim film:\n\n$reason';
-      }
-    } else if (contextInfo.tier == ContextualIntentTier.thematicBridge) {
-      if (!reason.toLowerCase().contains('köprü') && !reason.toLowerCase().contains('çıkıp')) {
-        reason = 'Önceki seriden çıkıp aradığın benzer atmosferi korumak için sana bu yapımı seçtim:\n\n$reason';
-      }
-    } else if (activeFranchise != null && matchedMovie != null && !isAiTitleInFranchise) {
-      if (contextInfo.excludeGenres.contains('animasyon')) {
-        reason = 'Animasyon yerine canlı aksiyon (live-action) bir yapım tercih ettiğin için $activeFranchise evreninin bu sevilen filmini seçtim.';
-      } else {
-        reason = '$activeFranchise serisinden senin için seçtiğim bir diğer film:';
-      }
-    } else if (contextInfo.excludeGenres.contains('animasyon') && (reason.contains('zaman yolculuğu') || reason.contains('kozmik') || reason.contains('paradoks'))) {
-      reason = 'Animasyon yerine canlı aksiyon (live-action) bir yapım tercih ettiğin için $activeFranchise evreninin bu sevilen filmini seçtim.';
     }
 
     if (matchedMovie != null) {
@@ -1714,6 +2204,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // Record recommendation proposal in database
       await _movieRepo.recordRecommendationProposal(matchedMovie);
+
+      // Auto-cache valid recommendation into Supabase cache pool in background
+      _backendAiService.recordRecommendationInCache(
+        movie: matchedMovie,
+        reason: reason,
+        matchingAspects: (result['matching_aspects'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [],
+      );
 
       final replyMsg = ChatMessage(
         id: _uuid.v4(),
@@ -1730,26 +2227,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
       state = state.copyWith(
         messages: [...state.messages, replyMsg],
         isGenerating: false,
+        pendingReviewMovie: null,
+        isAwaitingInterviewAnswer: false,
       );
     } else {
-      // If user was inquiring about a franchise/sequel or specific topic, provide a courteous contextual explanation
-      if (contextInfo.inheritedFranchise != null || cleanSearchQuery.isNotEmpty) {
-        final franchiseName = contextInfo.inheritedFranchise ?? cleanSearchQuery;
-        final explanationMsg = ChatMessage(
-          id: _uuid.v4(),
-          sender: MessageSender.assistant,
-          content: 'Aradığın seride (**$franchiseName**) kriterlerine uyan ve henüz izlemediğin yeni bir film maalesef bulunamadı.\n\n'
-              'Dilersen benzer evrenlerden taze yapımlara, popüler yeni filmlere veya farklı bir türe göz atabiliriz! 🍿',
-          timestamp: DateTime.now().toIso8601String(),
-          options: ['Popüler Yeni Filmler 🌟', 'Benzer Evrenlerden Öner 🦸‍♂️', 'Farklı Bir Tür Seç 🎬'],
-        );
-        await _chatRepo.saveMessage(explanationMsg);
-        state = state.copyWith(
-          messages: [...state.messages, explanationMsg],
-          isGenerating: false,
-        );
-        return;
-      }
 
       // Try finding an unwatched trending/popular movie
       final trending = await _tmdbService.getTrendingMovies();
@@ -1774,6 +2255,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         state = state.copyWith(
           messages: [...state.messages, altMsg],
           isGenerating: false,
+          pendingReviewMovie: null,
+          isAwaitingInterviewAnswer: false,
         );
       } else {
         // Truly all unwatched options exhausted: Honest message without pushing watched movies
@@ -1788,6 +2271,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         state = state.copyWith(
           messages: [...state.messages, exhaustedMsg],
           isGenerating: false,
+          pendingReviewMovie: null,
+          isAwaitingInterviewAnswer: false,
         );
       }
     }
@@ -1815,7 +2300,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     final oldest = rewatchCandidates.first;
     final formattedDate = DateFormatter.formatFriendly(oldest.recommendedAt);
-    final nudgeText = _geminiService.generateRewatchNudge(
+    final nudgeText = _backendAiService.generateRewatchNudge(
       movie: oldest,
       formattedDate: formattedDate,
     );
@@ -1835,15 +2320,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(
       messages: [...state.messages, rewatchMsg],
       isGenerating: false,
+      pendingReviewMovie: null,
+      isAwaitingInterviewAnswer: false,
     );
   }
 
-  /// Clear conversation history
+  /// Clear conversation history (resets everything including chat recommendation session)
   Future<void> clearHistory() async {
     _alreadyRecommendedInChat.clear();
     await _chatRepo.clearChat();
     state = const ChatState();
-    await initChat();
+    await initChat(isReset: true);
+  }
+
+  /// Clear ONLY the visual chat messages from the UI and chat table,
+  /// while preserving recommendation memory (_alreadyRecommendedInChat) and library awareness.
+  Future<void> clearChatDisplayOnly() async {
+    await _chatRepo.clearChat();
+    state = const ChatState();
+    await initChat(isReset: true);
   }
 }
 

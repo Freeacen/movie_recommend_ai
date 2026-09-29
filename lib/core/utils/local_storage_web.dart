@@ -14,3 +14,9 @@ void platformSetStorageItem(String key, String value) {
     html.window.localStorage[key] = value;
   } catch (_) {}
 }
+
+void platformRemoveStorageItem(String key) {
+  try {
+    html.window.localStorage.remove(key);
+  } catch (_) {}
+}

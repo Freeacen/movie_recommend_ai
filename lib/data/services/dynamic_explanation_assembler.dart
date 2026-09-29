@@ -32,29 +32,48 @@ class DynamicExplanationAssembler {
     List<String>? targetAspects,
   }) {
     // 1. Extract user's strongest local taste signals
-    final topLikedThemes = tasteProfile.likedThemes.take(3).toList();
-    final topPreferredGenres = tasteProfile.preferredGenres.take(2).toList();
-    final favoriteGenres = (movie.genres ?? '').split(',').map((g) => g.trim()).take(2).toList();
+    final topLikedThemes = tasteProfile.likedThemes.take(5).toList();
+    final topPreferredGenres = tasteProfile.preferredGenres.take(3).toList();
+    final favoriteGenres = (movie.genres ?? '').split(',').map((g) => g.trim()).where((g) => g.isNotEmpty).take(2).toList();
 
-    // 2. Resolve matching aspects
+    // 2. Only consider themes that genuinely align with the movie's content/genres
+    final movieGenreLower = (movie.genres ?? '').toLowerCase();
+    final movieOverviewLower = (movie.overview ?? '').toLowerCase();
+    final movieTitleLower = movie.title.toLowerCase();
+
+    final matchingThemes = topLikedThemes.where((theme) {
+      final t = theme.toLowerCase();
+      if (movieGenreLower.contains(t) || movieOverviewLower.contains(t) || movieTitleLower.contains(t)) {
+        return true;
+      }
+      final words = t.split(' ').where((w) => w.length > 3);
+      return words.any((w) => movieGenreLower.contains(w) || movieOverviewLower.contains(w));
+    }).toList();
+
+    // 3. Resolve matching aspects
     final matched = <String>[];
     if (targetAspects != null && targetAspects.isNotEmpty) {
       matched.addAll(targetAspects);
+    } else if (matchingThemes.isNotEmpty) {
+      matched.addAll(matchingThemes);
+    } else if (favoriteGenres.isNotEmpty) {
+      matched.addAll(favoriteGenres);
     } else {
-      matched.addAll(topLikedThemes.isNotEmpty ? topLikedThemes : ['ters köşe kurgu', 'akıl almaz kurgu']);
+      matched.add('nitelikli sinema');
     }
 
-    // 3. Construct modular personalized hook
+    // 4. Construct modular personalized hook without hallucinating unrelated themes
     String personalizedHook = '';
-    if (topLikedThemes.isNotEmpty && templateHookGenre != null && templateHookGenre.isNotEmpty) {
-      personalizedHook = '$templateHookGenre ve profilindeki "${topLikedThemes.first}" gibi unsurlara tutkun bir sinemasever olarak;';
-    } else if (topPreferredGenres.isNotEmpty) {
-      personalizedHook = 'Favorilerin arasında yer alan ${topPreferredGenres.first} sinemasına ve zihin bükücü anlatılara ilgi duyan biri olarak;';
+    if (matchingThemes.isNotEmpty && templateHookGenre != null && templateHookGenre.isNotEmpty) {
+      personalizedHook = '$templateHookGenre ve profilindeki "${matchingThemes.first}" gibi unsurlara tutkun bir sinemasever olarak;';
+    } else if (matchingThemes.isNotEmpty) {
+      personalizedHook = 'Profilindeki "${matchingThemes.first}" gibi unsurlara ve kaliteli sinema anlatılarına tutkun biri olarak;';
     } else if (templateHookGenre != null && templateHookGenre.isNotEmpty) {
       personalizedHook = '$templateHookGenre;';
+    } else if (favoriteGenres.isNotEmpty) {
+      personalizedHook = 'Favori türlerinden olan ${favoriteGenres.join(" ve ")} sinemasına ilgi duyan biri olarak;';
     } else {
-      final genreStr = favoriteGenres.isNotEmpty ? favoriteGenres.join(' ve ') : 'nitelikli sinema';
-      personalizedHook = '$genreStr türündeki derin hikayeleri ve akıl almaz ters köşeleri seven biri olarak;';
+      personalizedHook = 'Sinema zevkine ve kaliteli anlatılara önem veren bir izleyici olarak;';
     }
 
     // 4. Resolve core summary and mood accent

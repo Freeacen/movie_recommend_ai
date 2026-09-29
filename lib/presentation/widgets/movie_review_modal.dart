@@ -322,21 +322,21 @@ class _MovieReviewModalState extends ConsumerState<MovieReviewModal> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              color: AppColors.primaryAmber.withValues(alpha: 0.12),
+              color: AppColors.primaryBlue.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.primaryAmber.withValues(alpha: 0.4)),
+              border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.35)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.star_rounded, color: AppColors.primaryAmber, size: 20),
+                const Icon(Icons.star_rounded, color: AppColors.primaryBlue, size: 20),
                 const SizedBox(width: 4),
                 Text(
                   '${_currentScore.toStringAsFixed(1)} / 10',
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: AppColors.primaryAmber,
+                    color: AppColors.primaryBlue,
                   ),
                 ),
               ],
@@ -585,11 +585,11 @@ class _MovieReviewModalState extends ConsumerState<MovieReviewModal> {
           Expanded(
             child: Row(
               children: [
-                const Icon(Icons.star_half_rounded, size: 16, color: AppColors.primaryAmber),
+                const Icon(Icons.star_half_rounded, size: 16, color: AppColors.primaryBlue),
                 const SizedBox(width: 4),
                 Text(
                   'Puan: ${_currentScore.toStringAsFixed(1)}',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryAmber),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryBlue),
                 ),
                 Expanded(
                   child: SliderTheme(
@@ -603,7 +603,7 @@ class _MovieReviewModalState extends ConsumerState<MovieReviewModal> {
                       min: 0.0,
                       max: 10.0,
                       divisions: 100, // 0.1 increments
-                      activeColor: AppColors.primaryAmber,
+                      activeColor: AppColors.primaryBlue,
                       inactiveColor: AppColors.surfaceElevated,
                       onChanged: (val) {
                         setState(() {

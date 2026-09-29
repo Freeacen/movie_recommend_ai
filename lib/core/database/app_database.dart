@@ -57,16 +57,18 @@ class AppDatabase {
     try {
       return await openDatabase(
         dbPath,
-        version: 1,
+        version: 2,
         onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
       );
     } catch (e) {
       debugPrint('Warning: Database open failed for $dbPath ($e). Falling back to in-memory database.');
       try {
         return await openDatabase(
           inMemoryDatabasePath,
-          version: 1,
+          version: 2,
           onCreate: _onCreate,
+          onUpgrade: _onUpgrade,
         );
       } catch (e2) {
         debugPrint('Critical: In-memory openDatabase also failed ($e2).');
@@ -81,6 +83,7 @@ class AppDatabase {
       CREATE TABLE movies (
         id INTEGER PRIMARY KEY,
         title TEXT NOT NULL,
+        original_title TEXT,
         overview TEXT,
         poster_path TEXT,
         backdrop_path TEXT,
@@ -129,6 +132,14 @@ class AppDatabase {
         FOREIGN KEY(related_movie_id) REFERENCES movies(id)
       )
     ''');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      try {
+        await db.execute('ALTER TABLE movies ADD COLUMN original_title TEXT');
+      } catch (_) {}
+    }
   }
 
   /// Reset database for testing or fresh start
