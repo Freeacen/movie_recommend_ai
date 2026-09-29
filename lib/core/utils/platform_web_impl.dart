@@ -28,11 +28,15 @@ void platformClearUrlFragment() {
 Future<String?> platformPickImageAsBase64({
   int maxDimension = 512,
   double quality = 0.85,
+  bool fromCamera = false,
 }) async {
   final completer = Completer<String?>();
 
   try {
     final uploadInput = html.FileUploadInputElement()..accept = 'image/*';
+    if (fromCamera) {
+      uploadInput.setAttribute('capture', 'user');
+    }
     uploadInput.click();
 
     uploadInput.onChange.listen((event) {

@@ -18,8 +18,16 @@ class PlatformWebHelper {
   }
 
   /// Pick an image file from the device/filesystem and return it as a compressed base64 data URL
-  static Future<String?> pickImageAsBase64({int maxDimension = 512, double quality = 0.85}) {
-    return platformPickImageAsBase64(maxDimension: maxDimension, quality: quality);
+  static Future<String?> pickImageAsBase64({
+    int maxDimension = 512,
+    double quality = 0.85,
+    bool fromCamera = false,
+  }) {
+    return platformPickImageAsBase64(
+      maxDimension: maxDimension,
+      quality: quality,
+      fromCamera: fromCamera,
+    );
   }
 
   /// Open OAuth in a centered popup window and await the returned token hash

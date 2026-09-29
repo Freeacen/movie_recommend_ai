@@ -17,6 +17,7 @@ class LibraryScreen extends ConsumerStatefulWidget {
 
 class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  int _previousTabIndex = 0;
 
   @override
   void dispose() {
@@ -28,6 +29,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   Widget build(BuildContext context) {
     final libraryState = ref.watch(libraryProvider);
     final selectedTab = libraryState.selectedTabIndex;
+    final isForward = selectedTab >= _previousTabIndex;
+    _previousTabIndex = selectedTab;
 
     List<Movie> rawList;
     String emptyMessage;
@@ -274,76 +277,103 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
           const SizedBox(height: 4),
 
-          // Main Grid Content
+          // Main Grid Content with smooth directional transition
           Expanded(
-            child: libraryState.isLoading
-                ? const Center(child: CircularProgressIndicator(color: AppColors.primaryBlue))
-                : rawList.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24.0),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(emptyIcon, size: 48, color: AppColors.textLow.withValues(alpha: 0.6)),
-                              const SizedBox(height: 12),
-                              Text(
-                                emptyMessage,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: AppColors.textMedium, fontSize: 13, height: 1.5),
-                              ),
-                            ],
-                          ),
-                        ),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 260),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) {
+                final isCurrent = child.key == ValueKey(selectedTab);
+                final offsetTween = isCurrent
+                    ? Tween<Offset>(
+                        begin: Offset(isForward ? 0.08 : -0.08, 0),
+                        end: Offset.zero,
                       )
-                    : currentList.isEmpty
+                    : Tween<Offset>(
+                        begin: Offset.zero,
+                        end: Offset(isForward ? -0.08 : 0.08, 0),
+                      );
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: animation.drive(offsetTween),
+                    child: child,
+                  ),
+                );
+              },
+              child: KeyedSubtree(
+                key: ValueKey(selectedTab),
+                child: libraryState.isLoading
+                    ? const Center(child: CircularProgressIndicator(color: AppColors.primaryBlue))
+                    : rawList.isEmpty
                         ? Center(
                             child: Padding(
                               padding: const EdgeInsets.all(24.0),
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.filter_list_off_rounded, size: 48, color: AppColors.textLow.withValues(alpha: 0.6)),
+                                  Icon(emptyIcon, size: 48, color: AppColors.textLow.withValues(alpha: 0.6)),
                                   const SizedBox(height: 12),
                                   Text(
-                                    'Seçtiğin arama veya filtrelere uygun film bulunamadı.',
+                                    emptyMessage,
                                     textAlign: TextAlign.center,
                                     style: TextStyle(color: AppColors.textMedium, fontSize: 13, height: 1.5),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  OutlinedButton.icon(
-                                    onPressed: () {
-                                      _searchController.clear();
-                                      ref.read(libraryProvider.notifier).clearFilters();
-                                    },
-                                    icon: const Icon(Icons.clear_all_rounded, size: 18),
-                                    label: const Text('Filtreleri Temizle'),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: AppColors.primaryBlue,
-                                      side: const BorderSide(color: AppColors.primaryBlue),
-                                    ),
                                   ),
                                 ],
                               ),
                             ),
                           )
-                        : GridView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-                            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: 155,
-                              mainAxisExtent: 225,
-                              crossAxisSpacing: 12,
-                              mainAxisSpacing: 12,
-                            ),
-                            itemCount: currentList.length,
-                            itemBuilder: (context, index) {
-                              final movie = currentList[index];
-                              return MovieCard(
-                                movie: movie,
-                                onTap: () => MovieDetailModal.show(context, movie),
-                              );
-                            },
-                          ),
+                        : currentList.isEmpty
+                            ? Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(24.0),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.filter_list_off_rounded, size: 48, color: AppColors.textLow.withValues(alpha: 0.6)),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Seçtiğin arama veya filtrelere uygun film bulunamadı.',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(color: AppColors.textMedium, fontSize: 13, height: 1.5),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      OutlinedButton.icon(
+                                        onPressed: () {
+                                          _searchController.clear();
+                                          ref.read(libraryProvider.notifier).clearFilters();
+                                        },
+                                        icon: const Icon(Icons.clear_all_rounded, size: 18),
+                                        label: const Text('Filtreleri Temizle'),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: AppColors.primaryBlue,
+                                          side: const BorderSide(color: AppColors.primaryBlue),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : GridView.builder(
+                                padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: 155,
+                                  mainAxisExtent: 225,
+                                  crossAxisSpacing: 12,
+                                  mainAxisSpacing: 12,
+                                ),
+                                itemCount: currentList.length,
+                                itemBuilder: (context, index) {
+                                  final movie = currentList[index];
+                                  return MovieCard(
+                                    movie: movie,
+                                    onTap: () => MovieDetailModal.show(context, movie),
+                                  );
+                                },
+                              ),
+              ),
+            ),
           ),
         ],
       ),
@@ -358,21 +388,35 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
             color: isSelected ? AppColors.primaryBlue : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: AppColors.primaryBlue.withValues(alpha: 0.35),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
           ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+          child: AnimatedDefaultTextStyle(
+            duration: const Duration(milliseconds: 200),
             style: TextStyle(
               fontSize: 12,
               fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
               color: isSelected ? Colors.white : AppColors.textMedium,
+            ),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),

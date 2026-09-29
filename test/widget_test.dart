@@ -123,6 +123,27 @@ void main() {
       ),
     );
     expect(find.text('🍿'), findsOneWidget);
+
+    // 3. Avatar selection sheet displays Gallery and Camera options
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Consumer(
+              builder: (context, ref, _) => ElevatedButton(
+                onPressed: () => UserAvatarWidget.showAvatarSelectionSheet(context, ref),
+                child: const Text('Open Sheet'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open Sheet'));
+    await tester.pumpAndSettle();
+    expect(find.text('Galeriden Seç'), findsOneWidget);
+    expect(find.text('Kameradan Çek'), findsOneWidget);
+    expect(find.text('Hazır Sinematik Avatarlar'), findsOneWidget);
   });
 
   test('SettingsNotifier updates avatar and username correctly', () async {

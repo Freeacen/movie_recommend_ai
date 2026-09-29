@@ -198,83 +198,13 @@ class _MovieDetailModalState extends ConsumerState<MovieDetailModal> {
                 // 2. ACTIVE TRAILER PLAYER (IF PLAYING)
                 if (_isPlayingTrailer && _trailerKey != null)
                   Positioned(
-                    top: 0,
+                    top: 50,
                     left: 0,
                     right: 0,
                     height: heroHeight,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-                          color: AppColors.surfaceElevated,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.movie_filter_rounded, size: 16, color: AppColors.primaryBlue),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    'Fragman Oynatılıyor',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.textMedium,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  TextButton.icon(
-                                    onPressed: () {
-                                      PlatformWebHelper.openInNewTab(
-                                        'https://www.youtube.com/watch?v=$_trailerKey',
-                                      );
-                                    },
-                                    icon: const Icon(Icons.open_in_new_rounded, size: 14),
-                                    label: const Text('YouTube\'da Aç', style: TextStyle(fontSize: 12)),
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: AppColors.textMedium,
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      minimumSize: Size.zero,
-                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  FilledButton.icon(
-                                    onPressed: () {
-                                      setState(() {
-                                        _isPlayingTrailer = false;
-                                      });
-                                    },
-                                    icon: const Icon(Icons.close_rounded, size: 14),
-                                    label: const Text('Afişe Dön', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: AppColors.primaryBlue.withValues(alpha: 0.15),
-                                      foregroundColor: AppColors.primaryBlue,
-                                      elevation: 0,
-                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                      minimumSize: Size.zero,
-                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Container(
-                            color: Colors.black,
-                            child: TrailerPlayerView(youtubeKey: _trailerKey!),
-                          ),
-                        ),
-                      ],
+                    child: Container(
+                      color: Colors.black,
+                      child: TrailerPlayerView(youtubeKey: _trailerKey!),
                     ),
                   ),
 
@@ -293,8 +223,8 @@ class _MovieDetailModalState extends ConsumerState<MovieDetailModal> {
                     physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
                     padding: EdgeInsets.zero,
                     children: [
-                      // Transparent spacer so the hero poster is fully visible initially
-                      SizedBox(height: (heroHeight + 75).clamp(360.0, 520.0)),
+                      // Transparent spacer so the hero poster or trailer is fully visible initially
+                      SizedBox(height: _isPlayingTrailer ? (heroHeight + 54) : (heroHeight + 75).clamp(360.0, 520.0)),
 
                       // Overlapping transparent content panel
                       Container(
@@ -752,41 +682,76 @@ class _MovieDetailModalState extends ConsumerState<MovieDetailModal> {
       ),
     ),
 
-    // 3. TOP FLOATING CONTROLS (Drag handle & Close Button)
+    // 3. TOP CONTROLS (Drag handle, Close Button & Afişe Dön)
     Positioned(
-      top: 10,
-      left: 16,
-      right: 16,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          const SizedBox(width: 36),
-          Container(
-            width: 44,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(2),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.4),
-                  blurRadius: 4,
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        height: 50,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: _isPlayingTrailer ? AppColors.surfaceElevated : Colors.transparent,
+          border: _isPlayingTrailer
+              ? Border(
+                  bottom: BorderSide(
+                    color: AppColors.border.withValues(alpha: 0.5),
+                    width: 1,
+                  ),
+                )
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            if (_isPlayingTrailer)
+              FilledButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _isPlayingTrailer = false;
+                  });
+                },
+                icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                label: const Text('Afişe Dön', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primaryBlue.withValues(alpha: 0.15),
+                  foregroundColor: AppColors.primaryBlue,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
-              ],
+              )
+            else
+              const SizedBox(width: 36),
+            Container(
+              width: 44,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.65),
+                borderRadius: BorderRadius.circular(2),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.4),
+                    blurRadius: 4,
+                  ),
+                ],
+              ),
             ),
-          ),
-          Material(
-            color: Colors.black.withValues(alpha: 0.55),
-            shape: const CircleBorder(),
-            child: IconButton(
-              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
-              padding: const EdgeInsets.all(8),
-              constraints: const BoxConstraints(),
-              tooltip: 'Kapat',
-              onPressed: () => Navigator.of(context).pop(),
+            Material(
+              color: Colors.black.withValues(alpha: 0.55),
+              shape: const CircleBorder(),
+              child: IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(),
+                tooltip: 'Kapat',
+                onPressed: () => Navigator.of(context).pop(),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     ),
   ],

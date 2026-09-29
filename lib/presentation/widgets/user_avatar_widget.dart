@@ -100,11 +100,7 @@ class UserAvatarWidget extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.surfaceElevated,
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border(
-                  top: BorderSide(color: AppColors.border, width: 1.5),
-                  left: BorderSide(color: AppColors.border.withValues(alpha: 0.5), width: 1),
-                  right: BorderSide(color: AppColors.border.withValues(alpha: 0.5), width: 1),
-                ),
+                border: Border.all(color: AppColors.border, width: 1),
               ),
               padding: EdgeInsets.fromLTRB(
                 20,
@@ -139,34 +135,80 @@ class UserAvatarWidget extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  // Option 1: Upload from device
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryBlue,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                      ),
-                      icon: const Icon(Icons.file_upload_rounded, size: 18),
-                      label: const Text(
-                        '📁 Cihazdan / Galeriden Fotoğraf Yükle',
-                        style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
-                      ),
-                      onPressed: () async {
-                        Navigator.pop(sheetCtx);
-                        final base64Image = await PlatformWebHelper.pickImageAsBase64();
-                        if (base64Image != null) {
-                          await ref.read(settingsProvider.notifier).updateAvatar(base64Image);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Profil fotoğrafınız güncellendi! 📸')),
-                            );
+                  // Option 1: Upload from device (Gallery & Camera)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isNarrow = constraints.maxWidth < 340;
+                      final galleryButton = ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryBlue,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
+                        ),
+                        icon: const Icon(Icons.photo_library_rounded, size: 18),
+                        label: const Text(
+                          'Galeriden Seç',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                        onPressed: () async {
+                          Navigator.pop(sheetCtx);
+                          final base64Image = await PlatformWebHelper.pickImageAsBase64(fromCamera: false);
+                          if (base64Image != null) {
+                            await ref.read(settingsProvider.notifier).updateAvatar(base64Image);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Profil fotoğrafınız güncellendi! 📸')),
+                              );
+                            }
                           }
-                        }
-                      },
-                    ),
+                        },
+                      );
+
+                      final cameraButton = OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.textHigh,
+                          side: BorderSide(color: AppColors.border),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
+                        ),
+                        icon: const Icon(Icons.camera_alt_rounded, size: 18, color: AppColors.primaryAmber),
+                        label: const Text(
+                          'Kameradan Çek',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                        onPressed: () async {
+                          Navigator.pop(sheetCtx);
+                          final base64Image = await PlatformWebHelper.pickImageAsBase64(fromCamera: true);
+                          if (base64Image != null) {
+                            await ref.read(settingsProvider.notifier).updateAvatar(base64Image);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Profil fotoğrafınız güncellendi! 📸')),
+                              );
+                            }
+                          }
+                        },
+                      );
+
+                      if (isNarrow) {
+                        return Column(
+                          children: [
+                            SizedBox(width: double.infinity, child: galleryButton),
+                            const SizedBox(height: 8),
+                            SizedBox(width: double.infinity, child: cameraButton),
+                          ],
+                        );
+                      }
+
+                      return Row(
+                        children: [
+                          Expanded(child: galleryButton),
+                          const SizedBox(width: 10),
+                          Expanded(child: cameraButton),
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 18),
 
